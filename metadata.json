@@ -1,0 +1,5 @@
+{
+  "name": "AI Privacy Guard",
+  "description": "An application that explains website AI access requests in plain English, assesses privacy risks, and provides clear, actionable guidance for users. It simulates a browser extension's privacy analysis.",
+  "requestFramePermissions": []
+}
