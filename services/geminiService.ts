@@ -1,165 +1,159 @@
-import { GoogleGenAI, Type } from "@google/genai";
-import type { PermissionSummarizationInput, PermissionSummarizationOutput, PolicyChangeInput, PolicyChangeOutput, PolicySummaryInput, PolicySummaryOutput } from '../types';
+declare const chrome: any;
 
-const PERMISSION_SUMMARY_SYSTEM_PROMPT = `You are a privacy-first assistant embedded in a Chrome-only browser extension. Your purpose is to explain, in plain English, what AI access a site or extension is attempting; assess risk; and generate guidance that a non-technical user can understand and act on.
+import type {
+    PermissionSummarizationInput,
+    PermissionSummarizationOutput,
+    PolicyChangeInput,
+    PolicyChangeOutput,
+    PolicySummaryInput,
+    PolicySummaryOutput,
+} from "../types";
 
-Core Principles:
-- On-device analysis first. Never assume cloud use. If any field is unknown, say “Not available” and do not guess.
-- Plain-English, compact outputs. Avoid technical jargon. Be direct and factual.
-- Strict defaults. Banking, Healthcare, Education, Legal, and all Government sites are sensitive. On sensitive sites, the default recommendation is “Block by default; Allow once only if necessary.”
-- Explicitly state whether processing is on-device or cloud.
-- Always disclose if tracking/analytics are active.
-- If no privacy/AI policy is found, set policy_summary to: “No clear privacy/AI policy found. This can be risky.”
-- Redact any PII visible in inputs from outputs.
+// Generic helper to call Gemini via background.js
+async function callGemini(
+    model: string,
+    prompt: string,
+    systemInstruction: string,
+    responseSchema: any,
+    meta?: { siteUrl?: string; isSensitive?: boolean }
+): Promise<any> {
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+            {
+                type: "CALL_GEMINI",
+                model,
+                prompt,
+                systemInstruction,
+                responseSchema,
+                site_url: meta?.siteUrl,
+                is_sensitive: meta?.isSensitive === true,
+            },
+            (response) => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                } else if (!response.success) {
+                    reject(new Error(response.error));
+                } else {
+                    resolve(response.data);
+                }
+            }
+        );
+    });
+}
 
-Output Format Discipline:
-- Always produce JSON that matches the provided schema.
-- header_line: Mandatory, format: “This site uses AI and is accessing: X, Y, Z”. Derive X, Y, Z from data_scope, trackers_detected, processing_location.
-- summary_one_liner: <= 18 words.
-- bullets: 2–3 short strings focusing on data used, processing location, tracking/analytics.
-- risk_score: "Low" | "Medium" | "High".
-- action_hint: A short recommendation.
-- policy_summary: Summarize policy_text_excerpt if provided, otherwise use the default "no policy" line.
+const PERMISSION_SUMMARY_SYSTEM_PROMPT = `You are a privacy-first assistant embedded in a Chrome-only browser extension. Your purpose is to explain, in plain English, what AI access a site or extension is attempting; assess risk; and generate guidance that a non-technical user can understand and act on.\n\nCore Principles:\n- On-device analysis first. Never assume cloud use. If any field is unknown, say “Not available” and do not guess.\n- Plain-English, compact outputs. Avoid technical jargon. Be direct and factual.\n- Strict defaults. Banking, Healthcare, Education, Legal, and all Government sites are sensitive. On sensitive sites, the default recommendation is “Block by default; Allow once only if necessary.”\n- Explicitly state whether processing is on-device or cloud.\n- Always disclose if tracking/analytics are active.\n- If no privacy/AI policy is found, set policy_summary to: “No clear privacy/AI policy found. This can be risky.”\n- Redact any PII visible in inputs from outputs.\n\nOutput Format Discipline:\n- Always produce JSON that matches the provided schema.\n- header_line: Mandatory, format: “This site uses AI and is accessing: X, Y, Z”. Derive X, Y, Z from data_scope, trackers_detected, processing_location.\n- summary_one_liner: <= 18 words.\n- bullets: 2–3 short strings focusing on data used, processing location, tracking/analytics.\n- risk_score: \"Low\" | \"Medium\" | \"High\".\n- action_hint: A short recommendation.\n- policy_summary: Summarize policy_text_excerpt if provided, otherwise use the default \"no policy\" line.\n\nRISK RULES (Strict):\n- High risk: Sensitive category AND (forms, cloud processing, or trackers); OR keystroke/screenshot/clipboard access; OR no policy AND forms.\n- Medium risk: Non-sensitive site, cloud processing of page text only, no forms, no trackers; OR policy vague.\n- Low risk: On-device processing of non-sensitive page text only, no trackers, clear policy, no forms.\n\nTASK: Analyze the following JSON input about an AI permission request and generate a JSON output with your analysis.`;
+const POLICY_DIFF_SYSTEM_PROMPT = `You are a privacy-first AI assistant. Your task is to compare two versions of a privacy policy and summarize the key, user-impacting changes in a clear, concise, and non-technical way.\n\nRules:\n- Focus on changes related to: Data collection scope (forms, credentials, screenshots/clipboard), processing location (on-device vs cloud), data sharing/retention, and third-party analytics/tracking.\n- Use plain English and avoid legal jargon.\n- If no substantive changes are found, return a single bullet point: \"No substantive policy changes detected.\".\n- Output a JSON object matching the provided schema.\n- Each bullet point in the summary should be a complete sentence.\n\nTASK: Analyze the 'old_policy_excerpt' and 'new_policy_excerpt' in the provided JSON input and generate a JSON output summarizing the changes.`;
+const POLICY_SUMMARY_SYSTEM_PROMPT = `You are a privacy-first AI assistant. Your task is to summarize a privacy policy in a clear, concise, and non-technical way for a general audience.\n\nRules:\n- Extract the most critical points about user privacy.\n- Focus on: What data is collected (e.g., personal info, usage data, forms), how the data is used (e.g., service improvement, advertising, AI training), if data is shared with third parties, and how long data is kept.\n- Use plain English and avoid legal jargon.\n- Present the summary as a series of bullet points.\n- Output a JSON object matching the provided schema.\n- Each bullet point in the summary should be a complete sentence.\n\nTASK: Analyze the 'policy_excerpt' in the provided JSON input and generate a JSON output summarizing its key points.`;
 
-RISK RULES (Strict):
-- High risk: Sensitive category AND (forms, cloud processing, or trackers); OR keystroke/screenshot/clipboard access; OR no policy AND forms.
-- Medium risk: Non-sensitive site, cloud processing of page text only, no forms, no trackers; OR policy vague.
-- Low risk: On-device processing of non-sensitive page text only, no trackers, clear policy, no forms.
-
-TASK: Analyze the following JSON input about an AI permission request and generate a JSON output with your analysis.`;
-
-const POLICY_DIFF_SYSTEM_PROMPT = `You are a privacy-first AI assistant. Your task is to compare two versions of a privacy policy and summarize the key, user-impacting changes in a clear, concise, and non-technical way.
-
-Rules:
-- Focus on changes related to: Data collection scope (forms, credentials, screenshots/clipboard), processing location (on-device vs cloud), data sharing/retention, and third-party analytics/tracking.
-- Use plain English and avoid legal jargon.
-- If no substantive changes are found, return a single bullet point: "No substantive policy changes detected."
-- Output a JSON object matching the provided schema.
-- Each bullet point in the summary should be a complete sentence.
-
-TASK: Analyze the 'old_policy_excerpt' and 'new_policy_excerpt' in the provided JSON input and generate a JSON output summarizing the changes.`;
-
-const POLICY_SUMMARY_SYSTEM_PROMPT = `You are a privacy-first AI assistant. Your task is to summarize a privacy policy in a clear, concise, and non-technical way for a general audience.
-
-Rules:
-- Extract the most critical points about user privacy.
-- Focus on: What data is collected (e.g., personal info, usage data, forms), how the data is used (e.g., service improvement, advertising, AI training), if data is shared with third parties, and how long data is kept.
-- Use plain English and avoid legal jargon.
-- Present the summary as a series of bullet points.
-- Output a JSON object matching the provided schema.
-- Each bullet point in the summary should be a complete sentence.
-
-TASK: Analyze the 'policy_excerpt' in the provided JSON input and generate a JSON output summarizing its key points.`;
-
-
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-
+// Keep your JSON schemas exactly as you had them
 const permissionSummaryResponseSchema = {
-    type: Type.OBJECT,
+    type: "OBJECT",
     properties: {
-        header_line: { type: Type.STRING },
-        summary_one_liner: { type: Type.STRING },
-        bullets: { type: Type.ARRAY, items: { type: Type.STRING } },
-        risk_score: { type: Type.STRING },
-        red_flags: { type: Type.ARRAY, items: { type: Type.STRING } },
-        action_hint: { type: Type.STRING },
-        policy_summary: { type: Type.STRING },
+        header_line: { type: "STRING" },
+        summary_one_liner: { type: "STRING" },
+        bullets: { type: "ARRAY", items: { type: "STRING" } },
+        risk_score: { type: "STRING" },
+        red_flags: { type: "ARRAY", items: { type: "STRING" } },
+        action_hint: { type: "STRING" },
+        policy_summary: { type: "STRING" },
     },
     required: ["header_line", "summary_one_liner", "bullets", "risk_score", "red_flags", "action_hint", "policy_summary"]
 };
-
 const policyChangeResponseSchema = {
-    type: Type.OBJECT,
+    type: "OBJECT",
     properties: {
         change_summary: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
+            type: "ARRAY",
+            items: { type: "STRING" }
         }
     },
     required: ["change_summary"]
 };
-
 const policySummaryResponseSchema = {
-    type: Type.OBJECT,
+    type: "OBJECT",
     properties: {
         summary_points: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
+            type: "ARRAY",
+            items: { type: "STRING" }
         }
     },
     required: ["summary_points"]
 };
 
+// ----- PUBLIC FUNCTIONS -----
 
-const callGemini = async (model, prompt, systemInstruction, responseSchema) => {
-    try {
-        const response = await ai.models.generateContent({
-            model: model,
-            contents: prompt,
-            config: {
-                systemInstruction: systemInstruction,
-                responseMimeType: "application/json",
-                responseSchema: responseSchema,
-                temperature: 0.1
-            },
-        });
+export async function summarizePermissionRequest(
+    input: PermissionSummarizationInput
+): Promise<PermissionSummarizationOutput> {
+    const model = "gemini-2.5-flash";
+    const prompt = `Please analyze this permission request:\n\n${JSON.stringify(
+        input,
+        null,
+        2
+    )}`;
 
-        const jsonString = response.text.trim();
-        return JSON.parse(jsonString);
+    const result = await callGemini(
+        model,
+        prompt,
+        PERMISSION_SUMMARY_SYSTEM_PROMPT,
+        permissionSummaryResponseSchema,
+        { siteUrl: input.site_url, isSensitive: Array.isArray(input.context?.is_sensitive_category) && input.context.is_sensitive_category.length > 0 }
+    );
 
-    } catch (error) {
-        console.error("Error calling Gemini API:", error);
-        if (error instanceof Error) {
-            throw new Error(`Gemini API Error: ${error.message}`);
-        }
-        throw new Error("An unknown error occurred while communicating with the Gemini API.");
+    if (!result.header_line || !result.risk_score) {
+        throw new Error("Invalid JSON structure received from API.");
     }
+
+    return result as PermissionSummarizationOutput;
 }
 
-
-export const summarizePermissionRequest = async (
-  input: PermissionSummarizationInput
-): Promise<PermissionSummarizationOutput> => {
-  const model = 'gemini-2.5-flash';
-  const prompt = `Please analyze this permission request:\n\n${JSON.stringify(input, null, 2)}`;
-  
-  const result = await callGemini(model, prompt, PERMISSION_SUMMARY_SYSTEM_PROMPT, permissionSummaryResponseSchema);
-  
-  // Basic validation
-  if (!result.header_line || !result.risk_score) {
-    throw new Error("Invalid JSON structure received from API.");
-  }
-
-  return result as PermissionSummarizationOutput;
-};
-
-export const summarizePolicyChange = async (
+export async function summarizePolicyChange(
     input: PolicyChangeInput
-): Promise<PolicyChangeOutput> => {
-    const model = 'gemini-2.5-flash';
-    const prompt = `Please analyze the following policy changes:\n\n${JSON.stringify(input, null, 2)}`;
-    
-    const result = await callGemini(model, prompt, POLICY_DIFF_SYSTEM_PROMPT, policyChangeResponseSchema);
+): Promise<PolicyChangeOutput> {
+    const model = "gemini-2.5-flash";
+    const prompt = `Please analyze the following policy changes:\n\n${JSON.stringify(
+        input,
+        null,
+        2
+    )}`;
 
-    // Basic validation
+    const result = await callGemini(
+        model,
+        prompt,
+        POLICY_DIFF_SYSTEM_PROMPT,
+        policyChangeResponseSchema
+    );
+
     if (!result.change_summary || !Array.isArray(result.change_summary)) {
-        throw new Error("Invalid JSON structure received from API for policy change.");
+        throw new Error(
+            "Invalid JSON structure received from API for policy change."
+        );
     }
 
     return result as PolicyChangeOutput;
-};
+}
 
-export const summarizePolicy = async (
+export async function summarizePolicy(
     input: PolicySummaryInput
-): Promise<PolicySummaryOutput> => {
-    const model = 'gemini-2.5-flash';
-    const prompt = `Please summarize the following policy:\n\n${JSON.stringify(input, null, 2)}`;
-    
-    const result = await callGemini(model, prompt, POLICY_SUMMARY_SYSTEM_PROMPT, policySummaryResponseSchema);
+): Promise<PolicySummaryOutput> {
+    const model = "gemini-2.5-flash";
+    const prompt = `Please summarize the following policy:\n\n${JSON.stringify(
+        input,
+        null,
+        2
+    )}`;
 
-    // Basic validation
+    const result = await callGemini(
+        model,
+        prompt,
+        POLICY_SUMMARY_SYSTEM_PROMPT,
+        policySummaryResponseSchema
+    );
+
     if (!result.summary_points || !Array.isArray(result.summary_points)) {
-        throw new Error("Invalid JSON structure received from API for policy summary.");
+        throw new Error(
+            "Invalid JSON structure received from API for policy summary."
+        );
     }
 
     return result as PolicySummaryOutput;

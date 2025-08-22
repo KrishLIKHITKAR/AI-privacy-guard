@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Privacy Guard – Settings</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            padding: 20px;
+        }
+
+        .row {
+            margin: 12px 0;
+        }
+
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        input {
+            width: 100%;
+            max-width: 520px;
+            padding: 8px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+        }
+
+        button {
+            background: #3B82F6;
+            color: #fff;
+            border: none;
+            padding: 10px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .muted {
+            color: #6b7280;
+            font-size: 12px;
+            margin-top: 6px;
+        }
+
+        .ok {
+            color: #10B981;
+            margin-left: 8px;
+        }
+
+        .err {
+            color: #ef4444;
+            margin-left: 8px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>AI Privacy Guard – Settings</h1>
+    <div class="row">
+        <label for="apiKey">Gemini API Key</label>
+        <input id="apiKey" type="password" placeholder="Paste your key (kept locally)" />
+        <div class="muted">Stored only in chrome.storage.local on this device.</div>
+    </div>
+    <div class="row">
+        <label><input id="cloudEnabled" type="checkbox" /> Enable cloud analysis (uses your API key)</label>
+        <div class="muted">When off, analysis is on-device only.</div>
+    </div>
+    <div class="row">
+        <label for="allowMinutes">Allow once duration (minutes)</label>
+        <input id="allowMinutes" type="number" min="1" max="120" value="5" />
+    </div>
+    <div class="row">
+        <label for="retentionDays">Log retention (days)</label>
+        <input id="retentionDays" type="number" min="1" max="30" value="7" />
+    </div>
+    <div class="row">
+        <label for="sensitiveDefault">Sensitive site default</label>
+        <select id="sensitiveDefault">
+            <option value="block">Block by default</option>
+            <option value="ask">Ask every time</option>
+        </select>
+        <div class="muted">You can still Allow once from the modal.</div>
+    </div>
+    <div class="row">
+        <button id="save">Save</button>
+        <button id="test" style="margin-left:8px;background:#10B981;">Test Key</button>
+        <button id="export" style="margin-left:8px;background:#6B7280;">Export Logs</button>
+        <button id="clear" style="margin-left:8px;background:#EF4444;">Clear Logs</button>
+        <button id="back" style="margin-left:8px;background:#374151;">Back to Popup</button>
+        <span id="status"></span>
+    </div>
+    <script src="./options.js"></script>
+</body>
+
+</html>

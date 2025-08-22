@@ -1,20 +1,26 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# AI Privacy Guard (Chrome MV3)
 
-# Run and deploy your AI Studio app
+A Chrome-only extension that analyzes AI-related access on sites, assesses risk (Low/Medium/High) using a strict rubric, and gives plain-English guidance. Local-first: deterministic rules engine with optional Gemini cloud analysis (BYO API key, stored locally).
 
-This contains everything you need to run your app locally.
+## Features
+- CSP-safe MV3 build (no inline/remote scripts).
+- Popup with risk summary, red flags, and recommendation.
+- Local rules-engine fallback; final risk = max(model, rules).
+- On-device vs Cloud badges.
+- Options page: set/test Gemini API key; export/clear 7-day logs.
+- Blocking modal on sensitive sites with Allow once/Ask/Block; background enforces cloud blocking unless Allow once is active.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1gtfvW4zvPAPuRqhlyEZdYqxI2Li8aES6
+## Build and load
+```powershell
+# From project folder
+if (Test-Path dist) { Remove-Item dist -Recurse -Force }
+npm install
+npm run build
+```
+Load in Chrome: chrome://extensions → Developer Mode → Load unpacked → select `dist`.
 
-## Run Locally
+Set the key: Extension Details → Extension options → paste key → Save → Test Key.
 
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Notes
+- No backend; all data stays local.
+- Logs auto-purge after 7 days; export via Options.
