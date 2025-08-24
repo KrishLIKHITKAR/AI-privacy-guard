@@ -279,6 +279,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         })();
         return true;
     }
+    if (msg && msg.type === 'DETECT_AI_TEXT') {
+        (async () => {
+            try {
+                const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+                if (!text) { sendResponse({ success: true, data: { overallScore: 0, details: [] } }); return; }
+                // dynamic import of modular service (bundled by Vite)
+                const mod = await import('./services/textDetection.ts');
+                const { detectAIText } = mod;
+                const result = await detectAIText(text, { maxWordsPerChunk: 800, batchSize: 2 });
+                sendResponse({ success: true, data: result });
+            } catch (e) {
+                sendResponse({ success: false, error: e?.message || String(e) });
+            }
+        })();
+        return true;
+    }
 });
 // Smarter policy discovery: prefer footer links and score likely candidates
 function findPolicyLinkFromFooter() {

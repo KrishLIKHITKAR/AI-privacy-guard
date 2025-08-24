@@ -28,6 +28,7 @@ const App: React.FC = () => {
     const [fpNoted, setFpNoted] = useState<string | null>(null);
     const [showDebugRow, setShowDebugRow] = useState<boolean>(false);
     const [botResult, setBotResult] = useState<BotDetectionResult | null>(null);
+    const [aiTextScore, setAiTextScore] = useState<number | null>(null);
 
 
     const handleSummarizePermission = useCallback(async (input: PermissionSummarizationInput) => {
@@ -256,6 +257,19 @@ const App: React.FC = () => {
         } catch { }
     }, []);
 
+    // Example: trigger on-demand AI text detection (runs once on popup open here; can be moved to a button)
+    useEffect(() => {
+        try {
+            chrome?.tabs?.query?.({ active: true, currentWindow: true }, (tabs: any[]) => {
+                const tabId = tabs && tabs[0]?.id;
+                if (!tabId) return;
+                chrome.tabs.sendMessage(tabId, { type: 'DETECT_AI_TEXT' }, (res: any) => {
+                    if (res && res.success && res.data) setAiTextScore(res.data.overallScore ?? null);
+                });
+            });
+        } catch { }
+    }, []);
+
 
     return (
         <div className="min-h-screen bg-gray-50 text-brand-text-primary font-sans">
@@ -316,6 +330,11 @@ const App: React.FC = () => {
                                 {botResult && (
                                     <div className="mt-3 text-xs text-gray-500">
                                         Bot check: {botResult.isBot ? 'bot-like' : 'normal'} (conf {Math.round((botResult.confidence || 0) * 100)}%)
+                                    </div>
+                                )}
+                                {typeof aiTextScore === 'number' && (
+                                    <div className="mt-1 text-xs text-gray-500">
+                                        AI-text likelihood: {Math.round(aiTextScore * 100)}%
                                     </div>
                                 )}
                                 {currentScenario?.context?.ai_detected && currentScenario?.context?.ai_debug && (currentScenario.context.ai_debug.aiPostCount || 0) === 0 && (
