@@ -295,6 +295,35 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         })();
         return true;
     }
+    if (msg && msg.type === 'FIND_POLICY_LINK') {
+        try {
+            const url = findPolicyLinkFromFooter() || (function () {
+                const anchors = Array.from(document.querySelectorAll('a[href]'));
+                const cand = anchors.find(a => /privacy[\s-]?policy|privacy|policy/i.test(a.textContent || '') || /privacy|privacy-policy/i.test(a.getAttribute('href') || ''));
+                if (!cand) return null;
+                const href = cand.getAttribute('href');
+                if (!href) return null;
+                try { return new URL(href, location.href).href; } catch { return null; }
+            })();
+            sendResponse({ success: true, url: url || null });
+        } catch (e) {
+            sendResponse({ success: false, error: e?.message || String(e) });
+        }
+        return true;
+    }
+    if (msg && msg.type === 'ANALYZE_PRIVACY_POLICY') {
+        (async () => {
+            try {
+                const mod = await import('./services/policyAnalyzer.ts');
+                const { analyzePrivacyPolicy } = mod;
+                const result = await analyzePrivacyPolicy();
+                sendResponse({ success: true, data: result });
+            } catch (e) {
+                sendResponse({ success: false, error: e?.message || String(e) });
+            }
+        })();
+        return true;
+    }
 });
 // Smarter policy discovery: prefer footer links and score likely candidates
 function findPolicyLinkFromFooter() {

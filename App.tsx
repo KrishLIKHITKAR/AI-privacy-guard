@@ -29,6 +29,7 @@ const App: React.FC = () => {
     const [showDebugRow, setShowDebugRow] = useState<boolean>(false);
     const [botResult, setBotResult] = useState<BotDetectionResult | null>(null);
     const [aiTextScore, setAiTextScore] = useState<number | null>(null);
+    const [policyQuickSummary, setPolicyQuickSummary] = useState<{ url: string | null; summary: string; riskHighlights: string[] } | null>(null);
 
 
     const handleSummarizePermission = useCallback(async (input: PermissionSummarizationInput) => {
@@ -266,6 +267,12 @@ const App: React.FC = () => {
                 chrome.tabs.sendMessage(tabId, { type: 'DETECT_AI_TEXT' }, (res: any) => {
                     if (res && res.success && res.data) setAiTextScore(res.data.overallScore ?? null);
                 });
+                // Kick off a lightweight policy analysis on demand
+                chrome.tabs.sendMessage(tabId, { type: 'ANALYZE_PRIVACY_POLICY' }, (p: any) => {
+                    if (p && p.success && p.data) {
+                        setPolicyQuickSummary({ url: p.data.url || null, summary: p.data.summary || '', riskHighlights: p.data.riskHighlights || [] });
+                    }
+                });
             });
         } catch { }
     }, []);
@@ -393,6 +400,17 @@ const App: React.FC = () => {
                                     >
                                         View full policy
                                     </button>
+                                )}
+                                {policyQuickSummary && (
+                                    <div className="mt-4 bg-gray-50 p-3 rounded">
+                                        <div className="text-xs text-gray-600 font-semibold mb-1">Quick analyzer</div>
+                                        <div className="text-sm whitespace-pre-wrap">{policyQuickSummary.summary}</div>
+                                        {policyQuickSummary.riskHighlights?.length > 0 && (
+                                            <ul className="list-disc pl-5 mt-2 text-xs text-gray-600">
+                                                {policyQuickSummary.riskHighlights.map((h, idx) => <li key={idx}>{h}</li>)}
+                                            </ul>
+                                        )}
+                                    </div>
                                 )}
                             </div>
                         )}
