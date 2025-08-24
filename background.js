@@ -57,6 +57,61 @@ function redactPII(text) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'BOT_DETECT') {
+        (async () => {
+            try {
+                // Run in the page context to access navigator/window signals
+                const tabId = sender?.tab?.id;
+                if (!tabId) throw new Error('No active tab for bot detection');
+                const [{ result }] = await chrome.scripting.executeScript({
+                    target: { tabId },
+                    func: async () => {
+                        try {
+                            const anyGlobal = globalThis;
+                            // Inline minimal heuristic + optional global botd
+                            async function detect() {
+                                try {
+                                    if (anyGlobal && anyGlobal.botd && typeof anyGlobal.botd.load === 'function') {
+                                        const botd = await anyGlobal.botd.load();
+                                        const r = await botd.detect();
+                                        const bot = r?.bot || {};
+                                        const isBot = String(bot.result || '').toLowerCase() === 'bot';
+                                        const confidence = typeof bot.probability === 'number' ? Math.max(0, Math.min(1, bot.probability)) : (isBot ? 0.8 : 0.6);
+                                        return { isBot, confidence, signals: { type: bot.type, probability: bot.probability, requestId: r?.requestId, raw: bot } };
+                                    }
+                                } catch { }
+
+                                const nav = navigator;
+                                const signals = {
+                                    webdriver: !!nav.webdriver,
+                                    pluginsLength: (nav.plugins && nav.plugins.length) || 0,
+                                    languagesLength: (nav.languages && nav.languages.length) || 0,
+                                    hardwareConcurrency: (nav.hardwareConcurrency || 0),
+                                    deviceMemory: (nav.deviceMemory || 0),
+                                    userAgent: (nav.userAgent || ''),
+                                };
+                                let score = 0;
+                                if (signals.webdriver) score += 0.6;
+                                if (signals.pluginsLength === 0) score += 0.1;
+                                if (signals.languagesLength === 0) score += 0.1;
+                                if (/headless|puppeteer|playwright/i.test(signals.userAgent)) score += 0.6;
+                                const isBot = score >= 0.6;
+                                const confidence = Math.max(0.2, Math.min(1, score));
+                                return { isBot, confidence, signals };
+                            }
+                            return await detect();
+                        } catch (e) {
+                            return { isBot: false, confidence: 0.5, signals: { error: e?.message || 'botd-failed' } };
+                        }
+                    },
+                });
+                sendResponse({ success: true, data: result });
+            } catch (err) {
+                sendResponse({ success: false, error: err?.message || String(err) });
+            }
+        })();
+        return true;
+    }
     if (message.type === 'SUMMARIZE_POLICY_ONDEVICE') {
         (async () => {
             try {

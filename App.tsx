@@ -7,6 +7,7 @@ import { analyzePermissionLocal } from './services/rulesEngine';
 import { LocalSummarizer } from './services/localSummarizer';
 import OutputDisplay from './components/OutputDisplay';
 import { ShieldExclamationIcon, ShieldCheckIcon } from './components/Icons';
+import type { BotDetectionResult } from './services/botDetection';
 
 const App: React.FC = () => {
     // State for Permission Summarization
@@ -26,6 +27,7 @@ const App: React.FC = () => {
     const [activeOrigin, setActiveOrigin] = useState<string | null>(null);
     const [fpNoted, setFpNoted] = useState<string | null>(null);
     const [showDebugRow, setShowDebugRow] = useState<boolean>(false);
+    const [botResult, setBotResult] = useState<BotDetectionResult | null>(null);
 
 
     const handleSummarizePermission = useCallback(async (input: PermissionSummarizationInput) => {
@@ -245,6 +247,15 @@ const App: React.FC = () => {
 
     // removed manual policy analyzer handler (automatic now)
 
+    // Optional: trigger bot detection only on popup open (user action)
+    useEffect(() => {
+        try {
+            chrome?.runtime?.sendMessage?.({ type: 'BOT_DETECT' }, (res: any) => {
+                if (res && res.success) setBotResult(res.data as BotDetectionResult);
+            });
+        } catch { }
+    }, []);
+
 
     return (
         <div className="min-h-screen bg-gray-50 text-brand-text-primary font-sans">
@@ -302,6 +313,11 @@ const App: React.FC = () => {
                                         ? policySummaryOutput.summary_points.join('\n')
                                         : output.policy_summary
                                 }} />
+                                {botResult && (
+                                    <div className="mt-3 text-xs text-gray-500">
+                                        Bot check: {botResult.isBot ? 'bot-like' : 'normal'} (conf {Math.round((botResult.confidence || 0) * 100)}%)
+                                    </div>
+                                )}
                                 {currentScenario?.context?.ai_detected && currentScenario?.context?.ai_debug && (currentScenario.context.ai_debug.aiPostCount || 0) === 0 && (
                                     <div className="mt-2 text-xs text-blue-600">Detected AI via on-device classification (no active AI network calls observed).</div>
                                 )}
