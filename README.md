@@ -21,6 +21,26 @@ Load in Chrome: chrome://extensions → Developer Mode → Load unpacked → sel
 
 Set the key: Extension Details → Extension options → paste key → Save → Test Key.
 
+## Developer tools
+For quick local checks (no MCP required):
+
+```powershell
+# Fetch a URL (status, headers, body length)
+npm run -s tool:fetch -- https://example.com
+
+# Extract main article text using Readability
+npm run -s tool:readability -- https://example.com
+
+# Talk to a local Ollama model (requires Ollama running)
+$env:OLLAMA_HOST = '127.0.0.1:11434'; npm run -s tool:ollama -- --model llama3.2:3b --prompt "Say hi in one short sentence."
+```
+
+## Behavior matrix (summary)
+- No AI on page + Cloud OFF: Local heuristics; says no active AI; Low risk.
+- No AI on page + Cloud ON: Same as above; cloud not used.
+- AI on page + Cloud OFF: Local heuristics + on-device Chrome AI (if available); Medium/High as needed.
+- AI on page + Cloud ON: Same as above, then optionally enhances with Gemini (respecting sensitive-site allow-once).
+
 ## Notes
 - No backend; all data stays local.
 - Logs auto-purge after 7 days; export via Options.

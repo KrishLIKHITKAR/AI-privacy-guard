@@ -154,8 +154,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     if (!origin) throw new Error('No origin and URL provided');
                     const bases = [origin];
                     const paths = [
-                        '/privacy', '/privacy-policy', '/privacy.html', '/privacy-policy.html',
-                        '/legal/privacy', '/policies/privacy', '/policy/privacy', '/en/privacy', '/en/privacy-policy'
+                        '/privacy', '/privacy-policy', '/legal/privacy',
+                        '/policies/privacy', '/privacy.html', '/privacypolicy',
+                        '/terms/privacy', '/legal', '/terms-and-privacy',
+                        '/privacy-notice', '/data-protection', '/gdpr',
+                        '/en/privacy', '/en/privacy-policy', '/policy/privacy'
                     ];
                     for (const b of bases) {
                         for (const p of paths) {

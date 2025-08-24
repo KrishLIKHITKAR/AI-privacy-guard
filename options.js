@@ -2,7 +2,7 @@
     const $ = (id) => document.getElementById(id);
 
     function load() {
-        chrome.storage.local.get(['GEMINI_API_KEY', 'cloudEnabled', 'allowMinutes', 'retentionDays', 'sensitiveDefault'], (res) => {
+        chrome.storage.local.get(['GEMINI_API_KEY', 'cloudEnabled', 'allowMinutes', 'retentionDays', 'sensitiveDefault', 'showDebugRow', 'aiWhitelist', 'aiClassifierEnabled'], (res) => {
             if (res && res.GEMINI_API_KEY) {
                 $('apiKey').value = res.GEMINI_API_KEY;
             }
@@ -10,6 +10,11 @@
             if (typeof res.allowMinutes === 'number') $('allowMinutes').value = String(res.allowMinutes);
             if (typeof res.retentionDays === 'number') $('retentionDays').value = String(res.retentionDays);
             if (typeof res.sensitiveDefault === 'string') $('sensitiveDefault').value = res.sensitiveDefault;
+            $('showDebugRow').checked = !!res.showDebugRow;
+            const wl = res.aiWhitelist || {};
+            const lines = Object.keys(wl).sort().join('\n');
+            $('whitelist').value = lines;
+            $('aiClassifierEnabled').checked = !!res.aiClassifierEnabled;
         });
     }
 
@@ -29,7 +34,12 @@
         const allowMinutes = Math.max(1, Math.min(120, Number($('allowMinutes').value || 5)));
         const retentionDays = Math.max(1, Math.min(30, Number($('retentionDays').value || 7)));
         const sensitiveDefault = $('sensitiveDefault').value === 'ask' ? 'ask' : 'block';
-        chrome.storage.local.set({ GEMINI_API_KEY: key, cloudEnabled, allowMinutes, retentionDays, sensitiveDefault }, () => setStatus('ok', 'Saved'));
+        const showDebugRow = $('showDebugRow').checked;
+        const aiClassifierEnabled = $('aiClassifierEnabled').checked;
+        const wlText = $('whitelist').value || '';
+        const wlMap = {};
+        wlText.split(/\r?\n/).map(s => s.trim()).filter(Boolean).forEach(origin => { wlMap[origin] = true; });
+        chrome.storage.local.set({ GEMINI_API_KEY: key, cloudEnabled, allowMinutes, retentionDays, sensitiveDefault, showDebugRow, aiWhitelist: wlMap, aiClassifierEnabled }, () => setStatus('ok', 'Saved'));
     }
 
     function test() {

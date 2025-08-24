@@ -4,6 +4,7 @@ declare const chrome: any;
 import type { PermissionSummarizationInput, PermissionSummarizationOutput, PolicySummaryOutput } from './types';
 import { summarizePermissionRequest, summarizePolicy } from './services/geminiService';
 import { analyzePermissionLocal } from './services/rulesEngine';
+import { LocalSummarizer } from './services/localSummarizer';
 import OutputDisplay from './components/OutputDisplay';
 import { ShieldExclamationIcon, ShieldCheckIcon } from './components/Icons';
 
@@ -24,6 +25,7 @@ const App: React.FC = () => {
     const [policyUrl, setPolicyUrl] = useState<string | null>(null);
     const [activeOrigin, setActiveOrigin] = useState<string | null>(null);
     const [fpNoted, setFpNoted] = useState<string | null>(null);
+    const [showDebugRow, setShowDebugRow] = useState<boolean>(false);
 
 
     const handleSummarizePermission = useCallback(async (input: PermissionSummarizationInput) => {
@@ -68,11 +70,10 @@ const App: React.FC = () => {
                         action_hint: modelOut.action_hint || combined.action_hint,
                         policy_summary: modelOut.policy_summary || combined.policy_summary
                     };
-                    // If model header is more specific but still honest, use it; otherwise keep local header
-                    if (typeof modelOut.header_line === 'string' && modelOut.header_line.toLowerCase().includes('accessing')) {
-                        combined.header_line = modelOut.header_line;
+                    const localSaysAI = !!input.context?.ai_detected;
+                    if (!chromeOneLiner && modelOut.summary_one_liner && localSaysAI) {
+                        combined.summary_one_liner = modelOut.summary_one_liner.slice(0, 160);
                     }
-                    if (!chromeOneLiner && modelOut.summary_one_liner) combined.summary_one_liner = modelOut.summary_one_liner.slice(0, 160);
                 }
             } catch { /* cloud disabled or failed */ }
 
@@ -93,6 +94,8 @@ const App: React.FC = () => {
     }, []);
 
     useEffect(() => {
+        // Load UI toggles
+        try { chrome?.storage?.local?.get?.(['showDebugRow'], (r: any) => setShowDebugRow(!!r.showDebugRow)); } catch { }
         // Try to get live page context first; fallback to minimal default
         const fallback: PermissionSummarizationInput = {
             site_url: 'about:blank',
@@ -116,17 +119,19 @@ const App: React.FC = () => {
                         if (res && res.success && res.data) {
                             try { const u = new URL(res.data.site_url); setActiveOrigin(u.origin); } catch { }
                             const input = res.data as PermissionSummarizationInput;
-                            // If no strong signals but we have page text, ask Chrome Prompt API on-device if the page uses AI
+                            // If no strong signals but we have page text, ask Chrome Prompt API on-device if the page uses AI (strict yes/no)
                             try {
-                                if (!input.context?.ai_detected && input.page_text_excerpt) {
+                                const settings: any = await new Promise((resolve) => chrome.storage.local.get(['aiClassifierEnabled'], resolve));
+                                const classifierEnabled = !!settings?.aiClassifierEnabled;
+                                if (classifierEnabled && !input.context?.ai_detected && input.page_text_excerpt) {
                                     const anyGlobal: any = globalThis as any;
                                     if (anyGlobal?.ai?.prompt) {
                                         const session = await anyGlobal.ai.prompt.create();
-                                        const question = `Read the following page text and answer strictly with yes or no: does this page include AI features (AI chat, AI generator, LLM assistant)? Text: ${input.page_text_excerpt}`;
+                                        const excerpt = String(input.page_text_excerpt).slice(0, 1200);
+                                        const question = `You are a binary classifier that determines if a webpage uses AI technology.\n\nSTRICT RULES:\n1. Return ONLY "yes" or "no" - nothing else\n2. "yes" means the page ACTIVELY uses AI for core functionality\n3. "no" for marketing pages, blogs about AI, or static content\n\nACTIVE AI INDICATORS (return "yes"):\n- Interactive chat interfaces with AI responses\n- Image/text/code generation tools\n- AI-powered search or recommendations in use\n- Machine learning demos or playgrounds\n- Voice/image recognition interfaces\n\nNOT AI (return "no"):\n- Blog posts or articles about AI\n- Marketing pages for AI products\n- Documentation or tutorials\n- Static content mentioning AI\n- Analytics or tracking scripts\n\nAnalyze this page excerpt and respond with only "yes" or "no":\n${excerpt}`;
                                         const answer = await session.prompt(question);
-                                        const txt = String(answer || '').toLowerCase();
-                                        const keywordHit = /\b(ai (chat|assistant|generator|summary|powered))\b/.test((input.page_text_excerpt || '').toLowerCase());
-                                        if (/^yes\b/.test(txt) || keywordHit) {
+                                        const txt = String(answer || '').trim().toLowerCase();
+                                        if (txt === 'yes') {
                                             (input as any).context.ai_detected = true;
                                             if (input.processing_location === 'unknown') input.processing_location = 'on_device';
                                         }
@@ -191,17 +196,26 @@ const App: React.FC = () => {
                                 } catch { }
                                 if (!usedChromeAI) {
                                     try {
-                                        const ondev: any = await new Promise((resolve) => {
-                                            chrome.runtime.sendMessage({ type: 'SUMMARIZE_POLICY_ONDEVICE', excerpt: text }, resolve);
-                                        });
-                                        if (ondev && ondev.success && typeof ondev.summary === 'string') {
-                                            localSummary = ondev.summary;
-                                            const pts = localSummary
-                                                .split(/\.[\s\n]+/)
-                                                .map((x: string) => x.trim())
-                                                .filter(Boolean)
-                                                .slice(0, 5);
-                                            if (pts.length) setPolicySummaryOutput({ summary_points: pts });
+                                        // Try structured local summarizer first
+                                        const ls = new LocalSummarizer();
+                                        const res = ls.summarize(text, 4);
+                                        if (res.bullets && res.bullets.length) {
+                                            setPolicySummaryOutput({ summary_points: res.bullets });
+                                            localSummary = res.bullets.join(' ');
+                                        } else {
+                                            // Fallback to background heuristic if needed
+                                            const ondev: any = await new Promise((resolve) => {
+                                                chrome.runtime.sendMessage({ type: 'SUMMARIZE_POLICY_ONDEVICE', excerpt: text }, resolve);
+                                            });
+                                            if (ondev && ondev.success && typeof ondev.summary === 'string') {
+                                                localSummary = ondev.summary;
+                                                const pts = localSummary
+                                                    .split(/\.[\s\n]+/)
+                                                    .map((x: string) => x.trim())
+                                                    .filter(Boolean)
+                                                    .slice(0, 5);
+                                                if (pts.length) setPolicySummaryOutput({ summary_points: pts });
+                                            }
                                         }
                                     } catch { }
                                 }
@@ -285,19 +299,20 @@ const App: React.FC = () => {
                                 <OutputDisplay data={{
                                     ...output,
                                     policy_summary: policySummaryOutput
-                                        ? policySummaryOutput.summary_points.join(' ')
+                                        ? policySummaryOutput.summary_points.join('\n')
                                         : output.policy_summary
                                 }} />
                                 {currentScenario?.context?.ai_detected && currentScenario?.context?.ai_debug && (currentScenario.context.ai_debug.aiPostCount || 0) === 0 && (
                                     <div className="mt-2 text-xs text-blue-600">Detected AI via on-device classification (no active AI network calls observed).</div>
                                 )}
                                 {/* Why flagged row (debug/transparent) */}
-                                {currentScenario?.context?.ai_debug && (
+                                {showDebugRow && currentScenario?.context?.ai_debug && (
                                     <div className="mt-2 text-xs text-gray-500">
                                         <span className="font-semibold">Why flagged:</span>
                                         <span className="ml-2">POSTs: {currentScenario.context.ai_debug.aiPostCount || 0}</span>
                                         <span className="ml-2">Models: {currentScenario.context.ai_debug.largeModelCount || 0}</span>
                                         <span className="ml-2">Passive: {currentScenario.context.ai_debug.passiveEndpointSightings || 0}</span>
+                                        <span className="ml-2">WASM: {currentScenario.context.ai_debug.wasmIndicatorCount || 0}</span>
                                     </div>
                                 )}
                                 {activeOrigin && (

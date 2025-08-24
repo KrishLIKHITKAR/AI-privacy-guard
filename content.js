@@ -115,22 +115,44 @@ async function aiGuessPolicyLink() {
 async function gatherAISignals({ observeMs = 5000, whitelist = {} } = {}) {
     // Only consider strong signals: POSTs to known AI APIs OR large model downloads
     const aiEndpointPatterns = [
+        // OpenAI
         /api\.openai\.com\/v1/i,
+        // Anthropic
         /api\.anthropic\.com/i,
+        // Google/Vertex
         /generativelanguage\.googleapis\.com/i,
+        /aiplatform\.googleapis\.com/i,
+        /vertex\.ai/i,
+        // Azure OpenAI & Cognitive Services
+        /openai\.azure\.com/i,
+        /cognitiveservices\.azure\.com/i,
+        /\/openai\/deployments\//i,
+        // Cohere
         /api\.cohere\.ai/i,
-        /huggingface\.co\/(api|models|inference)/i
+        // Hugging Face
+        /api-inference\.huggingface\.co/i,
+        /huggingface\.co\/(api|models|inference)/i,
+        // Replicate
+        /api\.replicate\.com/i,
+        // Stability
+        /api\.stability\.ai/i
     ];
     const modelFileRe = /\.(onnx|tflite|safetensors|bin|gguf|pt|pth)(\?.*)?$/i;
     const ignoreResourceDomains = [
         /google-analytics\.com/i,
         /googletagmanager\.com/i,
-        /facebook\.com\/tr/i,
-        /linkedin\.com\/analytics/i,
         /doubleclick\.net/i,
+        /facebook\.com\/(tr|plugins)/i,
+        /connect\.facebook\.net/i,
+        /linkedin\.com\/(analytics|li|px)/i,
+        /twitter\.com\/i\/pixel/i,
         /cdnjs\.cloudflare\.com/i,
         /unpkg\.com/i,
-        /jsdelivr\.net/i
+        /jsdelivr\.net/i,
+        /static\.hotjar\.com/i,
+        /cdn\.segment\.com/i,
+        /cdn\.amplitude\.com/i,
+        /cdn\.mixpanel\.com/i
     ];
 
     const origin = (() => { try { return new URL(location.href).origin; } catch { return location.origin; } })();
@@ -158,7 +180,9 @@ async function gatherAISignals({ observeMs = 5000, whitelist = {} } = {}) {
         for (const r of resEntries) {
             const name = r && r.name;
             if (!name || ignoreResourceDomains.some(rx => rx.test(name))) continue;
-            if (!modelFileRe.test(name)) continue;
+            // model file extensions or common model filename patterns
+            const modelPattern = /model[-_]?weights|checkpoint|\.ggml(\?.*)?$/i;
+            if (!(modelFileRe.test(name) || modelPattern.test(name))) continue;
             const size = (r.transferSize || r.encodedBodySize || 0);
             if (size > 5_000_000) largeModelCount++; // >5MB to cut tiny assets
         }
@@ -171,6 +195,20 @@ async function gatherAISignals({ observeMs = 5000, whitelist = {} } = {}) {
         passiveEndpointSightings = resEntries.filter(r => aiEndpointPatterns.some(rx => rx.test(String(r && r.name || '')))).length;
     } catch { }
 
+    // Optional WASM indicator count (transformer/tfjs/ort), does not flip detection
+    let wasmIndicatorCount = 0;
+    try {
+        const wasmRx = /(ort[-_]?wasm|tfjs[-_]?backend[-_]?wasm|transformers?\.(wasm|js))/i;
+        const resEntries = (performance.getEntriesByType('resource') || []);
+        for (const r of resEntries) {
+            const name = String(r && r.name || '');
+            if (wasmRx.test(name)) {
+                const size = (r.transferSize || r.encodedBodySize || 0);
+                if (size > 1_000_000) wasmIndicatorCount++; // >1MB wasm/js
+            }
+        }
+    } catch { }
+
     // Decision: require evidence of active POSTs or large model downloads
     const aiDetected = (aiPostCount > 0) || (largeModelCount > 0);
     const processing = aiPostCount > 0 ? 'cloud' : (largeModelCount > 0 ? 'on_device' : 'unknown');
@@ -179,7 +217,7 @@ async function gatherAISignals({ observeMs = 5000, whitelist = {} } = {}) {
         aiDetected,
         processing,
         signals: aiPostCount + largeModelCount,
-        details: { aiPostCount, largeModelCount, passiveEndpointSightings }
+        details: { aiPostCount, largeModelCount, passiveEndpointSightings, wasmIndicatorCount }
     };
 }
 
@@ -242,10 +280,51 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 });
+// Smarter policy discovery: prefer footer links and score likely candidates
+function findPolicyLinkFromFooter() {
+    try {
+        const containers = Array.from(document.querySelectorAll('footer, [role="contentinfo"], .footer'));
+        const linkPatterns = [
+            /privacy[\s-]?policy/i,
+            /data[\s-]?protection/i,
+            /privacy[\s-]?notice/i,
+            /gdpr/i,
+            /your[\s-]?privacy/i
+        ];
+        const candidates = [];
+        for (const c of containers) {
+            const anchors = Array.from(c.querySelectorAll('a[href]'));
+            for (const a of anchors) {
+                const text = (a.textContent || '').trim();
+                const href = a.getAttribute('href') || '';
+                if (!href || /^javascript:/i.test(href)) continue;
+                if (linkPatterns.some(rx => rx.test(text) || rx.test(href))) {
+                    let score = 0.5;
+                    const lowerText = text.toLowerCase();
+                    if (lowerText.includes('privacy policy')) score += 0.3;
+                    else if (lowerText.includes('privacy')) score += 0.2;
+                    if (/\/privacy/i.test(href)) score += 0.2;
+                    candidates.push({ a, href, score });
+                }
+            }
+        }
+        candidates.sort((x, y) => y.score - x.score);
+        if (candidates[0]) {
+            const url = new URL(candidates[0].href, location.href);
+            return url.href;
+        }
+        return null;
+    } catch { return null; }
+}
+
 
 function shouldShowBlockingModal(ctx) {
-    const cats = ctx?.context?.is_sensitive_category || [];
-    const d = ctx?.data_scope || {};
+    // Prefer footer-driven discovery first
+    const footerUrl = findPolicyLinkFromFooter();
+    if (footerUrl) return footerUrl;
+    // Fallback heuristic across all anchors
+    const anchors = Array.from(document.querySelectorAll('a[href]'));
+    const cand = anchors.find(a => /privacy[\s-]?policy|privacy|policy/i.test(a.textContent || '') || /privacy|privacy-policy/i.test(a.getAttribute('href') || ''));
     const sensitive = Array.isArray(cats) && cats.length > 0;
     const anyHighSignals = d.forms || d.credentials_fields || ctx?.context?.trackers_detected || ctx?.processing_location !== 'on_device';
     return !!(sensitive && anyHighSignals);

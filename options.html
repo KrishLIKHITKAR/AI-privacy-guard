@@ -83,6 +83,23 @@
         </select>
         <div class="muted">You can still Allow once from the modal.</div>
     </div>
+    <hr class="row" />
+    <div class="row">
+        <label><input id="showDebugRow" type="checkbox" /> Show debug “Why flagged” row in popup</label>
+        <div class="muted">When enabled, shows POST/Models/WASM/Passive counters.</div>
+    </div>
+    <div class="row">
+        <label><input id="aiClassifierEnabled" type="checkbox" /> Enable on-device AI classifier (beta)</label>
+        <div class="muted">When enabled, the extension may infer AI usage from page text even without network signals.
+        </div>
+    </div>
+    <div class="row">
+        <label for="whitelist">AI detection whitelist (one origin per line)</label>
+        <textarea id="whitelist" rows="6"
+            style="width:100%;max-width:520px;padding:8px;border:1px solid #d1d5db;border-radius:6px;" placeholder="https://example.com
+https://sub.domain.com"></textarea>
+        <div class="muted">Sites here won’t be flagged as using AI. Useful for false positives.</div>
+    </div>
     <div class="row">
         <button id="save">Save</button>
         <button id="test" style="margin-left:8px;background:#10B981;">Test Key</button>
