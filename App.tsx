@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 // Allow using Chrome extension API in TS context
 declare const chrome: any;
 import type { PermissionSummarizationInput, PermissionSummarizationOutput, PolicySummaryOutput } from './types';
-import { summarizePermissionRequest, summarizePolicy } from './services/geminiService';
 import { analyzePermissionLocal } from './services/rulesEngine';
 import { LocalSummarizer } from './services/localSummarizer';
 import OutputDisplay from './components/OutputDisplay';
@@ -56,30 +55,7 @@ const App: React.FC = () => {
             let combined = { ...localOut } as PermissionSummarizationOutput;
             if (chromeOneLiner) combined.summary_one_liner = chromeOneLiner;
 
-            try {
-                const cloudEnabled = await new Promise<boolean>((resolve) => {
-                    chrome.storage.local.get(['cloudEnabled'], (r: any) => resolve(!!r.cloudEnabled));
-                });
-                if (cloudEnabled) {
-                    const modelOut = await summarizePermissionRequest(input);
-                    // Merge conservatively: take higher risk and union flags; keep local header wording discipline
-                    const riskRank = { Low: 0, Medium: 1, High: 2 } as const;
-                    const finalRisk = (riskRank[modelOut.risk_score] >= riskRank[combined.risk_score]) ? modelOut.risk_score : combined.risk_score;
-                    combined = {
-                        ...combined,
-                        risk_score: finalRisk,
-                        red_flags: Array.from(new Set([...(combined.red_flags || []), ...(modelOut.red_flags || [])])),
-                        // prefer model bullets if present to enrich context
-                        bullets: (modelOut.bullets && modelOut.bullets.length >= 2) ? modelOut.bullets : combined.bullets,
-                        action_hint: modelOut.action_hint || combined.action_hint,
-                        policy_summary: modelOut.policy_summary || combined.policy_summary
-                    };
-                    const localSaysAI = !!input.context?.ai_detected;
-                    if (!chromeOneLiner && modelOut.summary_one_liner && localSaysAI) {
-                        combined.summary_one_liner = modelOut.summary_one_liner.slice(0, 160);
-                    }
-                }
-            } catch { /* cloud disabled or failed */ }
+            // Cloud path removed: local-only output
 
             setOutput(combined);
         } catch (e) {
@@ -166,6 +142,8 @@ const App: React.FC = () => {
                 const tab = tabs && tabs[0];
                 const siteUrl = tab?.url;
                 if (!siteUrl) return;
+                const isHttp = /^https?:\/\//i.test(siteUrl);
+                if (!isHttp) { setIsPolicyLoading(false); return; }
                 if (policyAutoFilled) return;
                 setIsPolicyLoading(true);
                 chrome.runtime.sendMessage({ type: 'FETCH_POLICY', siteUrl, full: true }, async (res: any) => {
@@ -223,21 +201,7 @@ const App: React.FC = () => {
                                         }
                                     } catch { }
                                 }
-                                // If cloud enabled, enhance
-                                const cloudEnabled = await new Promise<boolean>((resolve) => {
-                                    try { chrome.storage.local.get(['cloudEnabled'], (r: any) => resolve(!!r.cloudEnabled)); } catch { resolve(false); }
-                                });
-                                if (cloudEnabled) {
-                                    try {
-                                        const result = await summarizePolicy({ policy_excerpt: text });
-                                        // Enforce 3-4 concise bullets
-                                        const trimmed = (result?.summary_points || [])
-                                            .map((s: string) => s.replace(/\s+/g, ' ').trim())
-                                            .filter(Boolean)
-                                            .slice(0, 4);
-                                        if (trimmed.length) setPolicySummaryOutput({ summary_points: trimmed });
-                                    } catch { }
-                                }
+                                // Cloud enhancement removed: keep local summary
                             }
                         }
                     } catch { }
@@ -252,8 +216,12 @@ const App: React.FC = () => {
     // Optional: trigger bot detection only on popup open (user action)
     useEffect(() => {
         try {
-            chrome?.runtime?.sendMessage?.({ type: 'BOT_DETECT' }, (res: any) => {
-                if (res && res.success) setBotResult(res.data as BotDetectionResult);
+            chrome?.tabs?.query?.({ active: true, currentWindow: true }, (tabs: any[]) => {
+                const u = tabs && tabs[0]?.url;
+                if (!u || !/^https?:\/\//i.test(u)) return;
+                chrome?.runtime?.sendMessage?.({ type: 'BOT_DETECT' }, (res: any) => {
+                    if (res && res.success) setBotResult(res.data as BotDetectionResult);
+                });
             });
         } catch { }
     }, []);
@@ -262,8 +230,10 @@ const App: React.FC = () => {
     useEffect(() => {
         try {
             chrome?.tabs?.query?.({ active: true, currentWindow: true }, (tabs: any[]) => {
-                const tabId = tabs && tabs[0]?.id;
-                if (!tabId) return;
+                const tab = tabs && tabs[0];
+                const tabId = tab?.id;
+                const url = tab?.url;
+                if (!tabId || !url || !/^https?:\/\//i.test(url)) return;
                 chrome.tabs.sendMessage(tabId, { type: 'DETECT_AI_TEXT' }, (res: any) => {
                     if (res && res.success && res.data) setAiTextScore(res.data.overallScore ?? null);
                 });
@@ -310,7 +280,7 @@ const App: React.FC = () => {
                                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                 </svg>
                                 <p className="mt-4 text-lg font-semibold text-brand-text-secondary">Analyzing AI Request...</p>
-                                <p className="text-sm text-gray-500">Communicating with Gemini API.</p>
+                                <p className="text-sm text-gray-500">Analyzing locally on-device.</p>
                             </div>
                         )}
                         {error && (

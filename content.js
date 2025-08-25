@@ -284,8 +284,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             try {
                 const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
                 if (!text) { sendResponse({ success: true, data: { overallScore: 0, details: [] } }); return; }
-                // dynamic import of modular service (bundled by Vite)
-                const mod = await import('./services/textDetection.ts');
+                // dynamic import of built service module (MV3-safe path)
+                const mod = await import(chrome.runtime.getURL('services/textDetection.js'));
                 const { detectAIText } = mod;
                 const result = await detectAIText(text, { maxWordsPerChunk: 800, batchSize: 2 });
                 sendResponse({ success: true, data: result });
@@ -314,10 +314,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg && msg.type === 'ANALYZE_PRIVACY_POLICY') {
         (async () => {
             try {
-                const mod = await import('./services/policyAnalyzer.ts');
+                const mod = await import(chrome.runtime.getURL('services/policyAnalyzer.js'));
                 const { analyzePrivacyPolicy } = mod;
                 const result = await analyzePrivacyPolicy();
                 sendResponse({ success: true, data: result });
+            } catch (e) {
+                sendResponse({ success: false, error: e?.message || String(e) });
+            }
+        })();
+        return true;
+    }
+    if (msg && msg.type === 'READABILITY_EXTRACT') {
+        (async () => {
+            try {
+                const { html, baseUrl } = msg;
+                // dynamic import of extractor
+                const mod = await import(chrome.runtime.getURL('services/readabilityExtract.js'));
+                const { extractReadableFromHtml } = mod;
+                const out = await extractReadableFromHtml(String(html || ''), String(baseUrl || location.href));
+                sendResponse({ success: out.ok, data: out });
             } catch (e) {
                 sendResponse({ success: false, error: e?.message || String(e) });
             }

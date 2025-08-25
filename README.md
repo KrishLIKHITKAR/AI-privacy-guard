@@ -19,6 +19,10 @@ npm run build
 ```
 Load in Chrome: chrome://extensions → Developer Mode → Load unpacked → select `dist`.
 
+Entrypoints:
+- Popup: `popup.html` (built to `dist/popup.html`)
+- Background: `background.ts` (built to `dist/background.js`)
+
 Set the key: Extension Details → Extension options → paste key → Save → Test Key.
 
 ## Developer tools

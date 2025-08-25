@@ -39,6 +39,10 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ data }) => {
                 </div>
             </div>
 
+            <p className="text-xs text-gray-500">
+                AI detection is based on strong signals only: active POSTs to AI APIs (OpenAI, Anthropic, Vertex, etc.) or large on-device model downloads. Passive mentions or analytics do not count.
+            </p>
+
             <div className="grid md:grid-cols-2 gap-6">
                 <div className="bg-gray-50 p-4 rounded-lg">
                     <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-2">Summary</h3>

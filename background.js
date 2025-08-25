@@ -164,6 +164,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     } catch { return null; }
                 })();
 
+                // Guard: only allow http/https
+                const isHttp = (u) => {
+                    try { const x = new URL(u); return x.protocol === 'http:' || x.protocol === 'https:'; } catch { return false; }
+                };
+                if ((policyUrl && !isHttp(policyUrl)) || (origin && !isHttp(origin + '/'))) {
+                    sendResponse({ success: true, excerpt: '', url: null, skipped: true });
+                    return;
+                }
+
                 // Simple cache (24h TTL) keyed by URL or origin
                 const cacheKey = policyUrl || `${origin}/__auto_policy`;
                 const cache = await new Promise(resolve => chrome.storage.local.get(['policyCache'], res => resolve(res.policyCache || {})));
@@ -207,6 +216,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
                 async function discoverPolicyFromOrigin() {
                     if (!origin) throw new Error('No origin and URL provided');
+                    if (!isHttp(origin + '/')) throw new Error('Non-http origin');
                     const bases = [origin];
                     const paths = [
                         '/privacy', '/privacy-policy', '/legal/privacy',

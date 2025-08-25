@@ -1,16 +1,42 @@
-export type LocalSummary = { bullets: string[]; confidence: number };
+export type LocalSummary = { bullets: string[]; confidence: number; shortExcerpt?: string };
 
 class SentenceScorer {
-    score(sentence: string, keyTerms: Record<string, string[]>): number {
+    private stop = new Set(['the', 'a', 'an', 'of', 'and', 'or', 'to', 'for', 'in', 'on', 'by', 'with', 'we', 'you', 'your', 'our', 'us', 'is', 'are', 'be', 'as', 'that']);
+    private tokenize(s: string): string[] {
+        return s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(t => t && !this.stop.has(t));
+    }
+    private sim(a: string[], b: string[]): number {
+        const sa = new Set(a); const sb = new Set(b);
+        const inter = [...sa].filter(x => sb.has(x)).length;
+        const denom = Math.sqrt(sa.size || 1) * Math.sqrt(sb.size || 1);
+        return inter / denom;
+    }
+    centrality(sentences: string[]): number[] {
+        const toks = sentences.map(s => this.tokenize(s));
+        const n = sentences.length;
+        const scores = new Array(n).fill(0);
+        for (let i = 0; i < n; i++) {
+            let s = 0; const ti = toks[i];
+            for (let j = 0; j < n; j++) {
+                if (i === j) continue;
+                const w = this.sim(ti, toks[j]);
+                s += w;
+            }
+            scores[i] = s / Math.max(1, n - 1);
+        }
+        return scores;
+    }
+    ruleBoost(sentence: string, keyTerms: Record<string, string[]>): number {
         let score = 0;
         const lower = sentence.toLowerCase();
-        Object.values(keyTerms).flat().forEach(term => {
-            if (lower.includes(term)) score += 0.1;
-        });
-        if (/\b(ai|artificial intelligence|machine learning)\b/i.test(sentence)) score += 0.3;
-        if (/\b(opt[- ]out|delete|remove)\b/i.test(sentence)) score += 0.2;
-        if (/\b(third[- ]party|share|sell)\b/i.test(sentence)) score += 0.2;
-        if (/\b(days?|months?|years?)\b/i.test(sentence)) score += 0.15;
+        Object.values(keyTerms).flat().forEach(term => { if (lower.includes(term)) score += 0.08; });
+        if (/\b(ai|artificial intelligence|machine learning|automated)\b/i.test(sentence)) score += 0.28;
+        if (/\b(opt[- ]?(out|in)|delete|remove|request)\b/i.test(sentence)) score += 0.18;
+        if (/\b(third[- ]?party|share|sell|disclose)\b/i.test(sentence)) score += 0.2;
+        if (/\b(days?|months?|years?|until)\b/i.test(sentence)) score += 0.15;
+        if (/\b(cookie|tracking|analytics|beacon|pixel)\b/i.test(sentence)) score += 0.12;
+        if (/\b(children|minor|13|16)\b/i.test(sentence)) score += 0.12;
+        if (/\b(sensitive|health|biometric|financial)\b/i.test(sentence)) score += 0.18;
         if (/\b(may|might|could|possibly)\b/i.test(sentence)) score -= 0.05;
         return Math.max(0, Math.min(1, score));
     }
@@ -32,15 +58,18 @@ export class LocalSummarizer {
             return { bullets: ['Policy text too short to analyze'], confidence: 0.1 };
         }
         const sentences = this.extractSentences(policyText);
-        const scored = sentences.map(s => ({
+        const centrality = this.scorer.centrality(sentences);
+        const scored = sentences.map((s, i) => ({
             text: s,
-            score: this.scorer.score(s, this.keyTerms),
+            base: centrality[i],
+            boost: this.scorer.ruleBoost(s, this.keyTerms),
             category: this.categorize(s)
-        }));
+        })).map(x => ({ ...x, score: Math.min(1, x.base * 0.6 + x.boost * 0.6) }));
         const selected = this.selectTopBullets(scored, maxBullets);
-        const bullets = selected.map(b => this.compress(b.text, b.category));
+        const bullets = this.dedupBullets(selected.map(b => this.compress(b.text, b.category)));
         const confidence = this.confidence(scored);
-        return { bullets, confidence };
+        const shortExcerpt = this.pickExcerpt(sentences, centrality);
+        return { bullets, confidence, shortExcerpt };
     }
 
     private extractSentences(text: string): string[] {
@@ -48,8 +77,10 @@ export class LocalSummarizer {
             .replace(/<[^>]*>/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
-        const sentences = cleaned.match(/[^.!?]+[.!?]+/g) || [];
-        return sentences.map(s => s.trim()).filter(s => s.length > 30 && s.length < 300);
+        // simple sentence split with abbreviation guard
+        const parts = cleaned.split(/(?<!\b(?:Mr|Mrs|Ms|Dr|Inc|Ltd|Co|vs))\.(\s+)/).join('. ').split(/(?<=[.!?])\s+/);
+        const sentences = (parts || []).map(s => s.trim());
+        return sentences.filter(s => s.length > 30 && s.length < 350).slice(0, 400);
     }
 
     private categorize(sentence: string): string {
@@ -98,5 +129,34 @@ export class LocalSummarizer {
         if (hasAI) c += 0.2;
         c += (Math.min(catCount, 6) / 6) * 0.3;
         return Math.min(1, c);
+    }
+
+    private pickExcerpt(sentences: string[], centrality: number[]): string | undefined {
+        if (!sentences.length) return undefined;
+        const idx = centrality
+            .map((s, i) => ({ s, i }))
+            .sort((a, b) => b.s - a.s)
+            .slice(0, 3)
+            .map(x => x.i)
+            .sort((a, b) => a - b);
+        const excerpt = idx.map(i => sentences[i]).join(' ');
+        return excerpt ? excerpt.slice(0, 280) + (excerpt.length > 280 ? '...' : '') : undefined;
+    }
+
+    private dedupBullets(bullets: string[]): string[] {
+        const out: string[] = [];
+        for (const b of bullets) {
+            const lower = b.toLowerCase();
+            if (out.some(x => this.similar(lower, x.toLowerCase()) > 0.85)) continue;
+            out.push(b);
+        }
+        return out;
+    }
+    private similar(a: string, b: string): number {
+        const sa = new Set(a.split(/\W+/).filter(Boolean));
+        const sb = new Set(b.split(/\W+/).filter(Boolean));
+        const inter = [...sa].filter(x => sb.has(x)).length;
+        const denom = Math.sqrt(sa.size || 1) * Math.sqrt(sb.size || 1);
+        return inter / denom;
     }
 }

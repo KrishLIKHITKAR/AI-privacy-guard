@@ -1,10 +1,10 @@
 {
     "manifest_version": 3,
     "name": "AI Privacy Guard",
-    "description": "An application that explains website AI access requests in plain English, assesses privacy risks, and provides clear, actionable guidance for users.",
+    "description": "Local-only MV3 extension that detects AI service usage via webRequest and explains risks using static rules and on-device AI.",
     "version": "1.0.0",
     "action": {
-        "default_popup": "index.html",
+        "default_popup": "popup.html",
         "default_icon": {
             "16": "assets/icon16.png",
             "48": "assets/icon48.png",
@@ -22,11 +22,10 @@
     "options_page": "options.html",
     "permissions": [
         "storage",
-        "activeTab",
-        "scripting"
+        "declarativeNetRequest",
+        "webRequest"
     ],
     "host_permissions": [
-        "https://generativelanguage.googleapis.com/*",
         "<all_urls>"
     ],
     "content_scripts": [

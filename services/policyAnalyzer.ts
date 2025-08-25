@@ -4,7 +4,6 @@
 declare const chrome: any;
 
 import { LocalSummarizer } from './localSummarizer';
-import { summarizePolicy } from './geminiService';
 
 export type PolicyAnalysis = {
     found: boolean;
@@ -12,6 +11,12 @@ export type PolicyAnalysis = {
     summary: string;
     riskHighlights: string[];
 };
+
+function hashText(s: string): string {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) { h = ((h << 5) - h) + s.charCodeAt(i); h |= 0; }
+    return String(h >>> 0);
+}
 
 async function findPolicyLinkFromContent(tabId: number): Promise<string | null> {
     return new Promise((resolve) => {
@@ -25,12 +30,12 @@ async function findPolicyLinkFromContent(tabId: number): Promise<string | null> 
     });
 }
 
-async function fetchPolicyText(siteUrl: string | null, policyUrl: string | null, wantFull = true): Promise<{ url: string | null; excerpt: string; fullText?: string }> {
+async function fetchPolicyText(siteUrl: string | null, policyUrl: string | null, wantFull = true): Promise<{ url: string | null; excerpt: string; fullText?: string; html?: string; baseUrl?: string | null }> {
     return new Promise((resolve) => {
         try {
             chrome.runtime.sendMessage({ type: 'FETCH_POLICY', siteUrl, url: policyUrl || undefined, full: wantFull }, (res: any) => {
                 if (res && res.success) {
-                    resolve({ url: res.url || policyUrl, excerpt: res.excerpt || '', fullText: res.fullText });
+                    resolve({ url: res.url || policyUrl, excerpt: res.excerpt || '', fullText: res.fullText, html: res.html, baseUrl: res.baseUrl });
                 } else {
                     resolve({ url: policyUrl, excerpt: '', fullText: '' });
                 }
@@ -71,23 +76,13 @@ async function summarizeLocal(text: string): Promise<string | null> {
     try {
         const ls = new LocalSummarizer();
         const res = ls.summarize(text, 4);
-        if (res.bullets && res.bullets.length) return res.bullets.join('\n');
+        if (res.bullets && res.bullets.length) {
+            const lines = [...res.bullets];
+            if (res.shortExcerpt) lines.push(`Excerpt: ${res.shortExcerpt}`);
+            return lines.join('\n');
+        }
     } catch { /* ignore */ }
     return null;
-}
-
-async function summarizeCloud(text: string): Promise<string | null> {
-    try {
-        const cloudEnabled = await new Promise<boolean>((resolve) => {
-            chrome.storage.local.get(['cloudEnabled'], (r: any) => resolve(!!r.cloudEnabled));
-        });
-        if (!cloudEnabled) return null;
-        const out = await summarizePolicy({ policy_excerpt: text.slice(0, 10000) });
-        const bullets = (out?.summary_points || []).map((s: string) => s.trim()).filter(Boolean).slice(0, 5);
-        return bullets.join('\n');
-    } catch {
-        return null;
-    }
 }
 
 export async function analyzePrivacyPolicy(): Promise<PolicyAnalysis> {
@@ -102,19 +97,42 @@ export async function analyzePrivacyPolicy(): Promise<PolicyAnalysis> {
         policyUrl = await findPolicyLinkFromContent(tabId);
     }
 
-    // Fetch and extract policy text via background (includes auto-discovery fallback)
+    // Fetch and extract policy HTML/text via background, then prefer Readability via content
     const fetched = await fetchPolicyText(siteUrl, policyUrl, true);
-    const text = (fetched.fullText || fetched.excerpt || '').trim();
-    const found = !!text;
-
-    // Summarize local-first, cloud fallback for long/complex
-    let summary = (await summarizeLocal(text)) || '';
-    const tooLong = text.length > 8000 || summary.length < 40; // heuristic complexity/quality
-    if (!summary || tooLong) {
-        const cloud = await summarizeCloud(text);
-        if (cloud && cloud.trim()) summary = cloud.trim();
+    let text = (fetched.fullText || fetched.excerpt || '').trim();
+    if (fetched?.html) {
+        try {
+            const extracted = await new Promise<any>((resolve) => {
+                chrome.tabs.sendMessage(tabId!, { type: 'READABILITY_EXTRACT', html: fetched.html, baseUrl: fetched.baseUrl || siteUrl }, (res: any) => resolve(res));
+            });
+            if (extracted && extracted.success && extracted.data && extracted.data.text) {
+                text = String(extracted.data.text || '').trim() || text;
+            }
+        } catch { /* ignore, keep fallback text */ }
     }
+    const found = !!text;
+    // Cache by content hash
+    let cacheKey = '';
+    if (found) {
+        const title = '';
+        cacheKey = 'policySum:' + hashText((fetched.url || '') + '|' + text.slice(0, 20000));
+        try {
+            const cached: any = await new Promise(resolve => chrome.storage.local.get([cacheKey], resolve));
+            if (cached && cached[cacheKey] && typeof cached[cacheKey] === 'string') {
+                const riskHighlights = extractRiskHighlights(text);
+                return { found, url: fetched.url || policyUrl, summary: cached[cacheKey], riskHighlights };
+            }
+        } catch { /* ignore */ }
+    }
+
+    // Summarize local-first only (on-device AI if available, otherwise LocalSummarizer v2)
+    let summary = (await summarizeLocal(text)) || '';
     if (!summary) summary = (text.slice(0, 400) + (text.length > 400 ? '…' : ''));
+
+    // Save cache
+    if (cacheKey && summary) {
+        try { await new Promise(resolve => chrome.storage.local.set({ [cacheKey]: summary }, resolve)); } catch { }
+    }
 
     const riskHighlights = extractRiskHighlights(text);
 

@@ -58,15 +58,7 @@
 
 <body>
     <h1>AI Privacy Guard – Settings</h1>
-    <div class="row">
-        <label for="apiKey">Gemini API Key</label>
-        <input id="apiKey" type="password" placeholder="Paste your key (kept locally)" />
-        <div class="muted">Stored only in chrome.storage.local on this device.</div>
-    </div>
-    <div class="row">
-        <label><input id="cloudEnabled" type="checkbox" /> Enable cloud analysis (uses your API key)</label>
-        <div class="muted">When off, analysis is on-device only.</div>
-    </div>
+    <!-- Cloud features removed: 100% local-only -->
     <div class="row">
         <label for="allowMinutes">Allow once duration (minutes)</label>
         <input id="allowMinutes" type="number" min="1" max="120" value="5" />
@@ -102,7 +94,7 @@ https://sub.domain.com"></textarea>
     </div>
     <div class="row">
         <button id="save">Save</button>
-        <button id="test" style="margin-left:8px;background:#10B981;">Test Key</button>
+
         <button id="export" style="margin-left:8px;background:#6B7280;">Export Logs</button>
         <button id="clear" style="margin-left:8px;background:#EF4444;">Clear Logs</button>
         <button id="back" style="margin-left:8px;background:#374151;">Back to Popup</button>

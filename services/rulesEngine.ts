@@ -18,7 +18,10 @@ function buildHeaderLine(input: PermissionSummarizationInput): string {
     if (input.context?.trackers_detected) parts.push("tracking active");
 
     const ai = !!input.context?.ai_detected;
-    const lead = ai ? 'This site uses AI and is accessing' : 'Potential access detected:';
+    if (!ai) {
+        return 'No active AI usage detected on this page';
+    }
+    const lead = 'This site uses AI and is accessing';
     return `${lead}: ${parts.join(", ")}`;
 }
 
@@ -89,7 +92,7 @@ export function analyzePermissionLocal(input: PermissionSummarizationInput): Per
     const ai = !!input.context?.ai_detected;
     const summary_one_liner = ai
         ? `Wants AI to ${intent}.`.slice(0, 120)
-        : `Read-only page analysis; no AI detected.`;
+        : `No active AI usage detected; read-only analysis.`;
 
     // Bullets
     const d = input.data_scope || {};
