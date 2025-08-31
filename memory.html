@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Privacy Guard – Memory</title>
+    <link rel="stylesheet" href="options.css" />
+</head>
+
+<body>
+    <div class="wrap">
+        <h1>AI Privacy Guard – Memory Control Panel</h1>
+        <div class="toolbar">
+            <input id="filterHost" placeholder="Filter by hostname (e.g., chatgpt.com)" />
+            <label><input type="checkbox" id="fEMAIL" checked /> EMAIL</label>
+            <label><input type="checkbox" id="fPHONE" checked /> PHONE</label>
+            <label><input type="checkbox" id="fCARD" checked /> CARD</label>
+            <label><input type="checkbox" id="fAPIKEY" checked /> APIKEY</label>
+            <input id="search" placeholder="Search in excerpt…" />
+            <button id="refresh" class="secondary">Refresh</button>
+            <button id="purge" class="danger">Purge All</button>
+        </div>
+        <div id="list"></div>
+    </div>
+    <script src="memory.js"></script>
+</body>
+
+</html>

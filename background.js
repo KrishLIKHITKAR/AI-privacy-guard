@@ -1,6 +1,96 @@
 // background.js
 
 const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+// Startup log to confirm the service worker loaded
+try { console.log('AIPG background.js service worker starting'); } catch { }
+
+// ---------------- Local Memory (ChatGPT-specific) ----------------
+const MEMORY_KEY = 'aipgMemoryRecords';
+const PII_INDEX_KEY = 'aipgPiiIndex'; // { [sessionId]: { link, site, lastTs, items: Array<{ id, ts, counts }> } }
+let __writeQueue = [];
+let __writeTimer = null;
+
+function validateMemoryRecord(r) {
+    try {
+        if (!r || typeof r !== 'object') {
+            try { console.warn('AIPG background: validateMemoryRecord failed - not object:', r); } catch { }
+            return false;
+        }
+        if (!r.id || typeof r.id !== 'string') {
+            try { console.warn('AIPG background: validateMemoryRecord failed - bad id:', r.id); } catch { }
+            return false;
+        }
+        if (!r.ts || typeof r.ts !== 'number') {
+            try { console.warn('AIPG background: validateMemoryRecord failed - bad ts:', r.ts); } catch { }
+            return false;
+        }
+        if (!r.site || typeof r.site !== 'string') {
+            try { console.warn('AIPG background: validateMemoryRecord failed - bad site:', r.site); } catch { }
+            return false;
+        }
+        if (!r.conversationUrl || typeof r.conversationUrl !== 'string') {
+            try { console.warn('AIPG background: validateMemoryRecord failed - bad conversationUrl:', r.conversationUrl); } catch { }
+            return false;
+        }
+        if (r.direction !== 'prompt' && r.direction !== 'response') {
+            try { console.warn('AIPG background: validateMemoryRecord failed - bad direction:', r.direction); } catch { }
+            return false;
+        }
+        if (typeof r.excerpt !== 'string') {
+            try { console.warn('AIPG background: validateMemoryRecord failed - bad excerpt:', typeof r.excerpt); } catch { }
+            return false;
+        }
+        if (r.direction === 'prompt') {
+            // rawAllowed required for prompt, piiCounts object expected
+            if (typeof r.rawAllowed !== 'boolean') {
+                try { console.warn('AIPG background: validateMemoryRecord failed - bad rawAllowed:', r.rawAllowed); } catch { }
+                return false;
+            }
+            if (!r.piiCounts || typeof r.piiCounts !== 'object') {
+                try { console.warn('AIPG background: validateMemoryRecord - fixing missing piiCounts'); } catch { }
+                r.piiCounts = { EMAIL: 0, PHONE: 0, CARD: 0, APIKEY: 0 };
+            }
+        }
+        // clamp sizes
+        if (r.direction === 'prompt') r.excerpt = String(r.excerpt).slice(0, 240);
+        if (r.direction === 'response') r.excerpt = String(r.excerpt).slice(0, 500);
+        try { console.log('AIPG background: validateMemoryRecord passed for:', r.direction, r.id); } catch { }
+        return true;
+    } catch (e) {
+        try { console.error('AIPG background: validateMemoryRecord exception:', e, r); } catch { }
+        return false;
+    }
+}
+
+function flushMemoryQueue() {
+    clearTimeout(__writeTimer); __writeTimer = null;
+    const batch = __writeQueue.splice(0, __writeQueue.length);
+    if (batch.length === 0) return;
+    chrome.storage.local.get([MEMORY_KEY], (res) => {
+        const arr = Array.isArray(res[MEMORY_KEY]) ? res[MEMORY_KEY] : [];
+        const next = arr.concat(batch);
+        // keep only most recent 500
+        next.sort((a, b) => a.ts - b.ts);
+        const capped = next.slice(Math.max(0, next.length - 500));
+        chrome.storage.local.set({ [MEMORY_KEY]: capped }, () => {
+            if (chrome.runtime.lastError) {
+                try { console.error('AIPG background: storage.set error', chrome.runtime.lastError); } catch { }
+            } else {
+                try { console.log('AIPG background: stored memory records len=', capped.length); } catch { }
+            }
+        });
+    });
+}
+
+function queueMemoryWrite(record) {
+    if (!validateMemoryRecord(record)) return false;
+    __writeQueue.push(record);
+    // In MV3 service workers, timers can be unreliable due to suspension.
+    // Flush immediately to ensure durability.
+    if (__writeTimer) { clearTimeout(__writeTimer); __writeTimer = null; }
+    flushMemoryQueue();
+    return true;
+}
 
 async function getApiKey() {
     return new Promise((resolve) => {
@@ -57,6 +147,64 @@ function redactPII(text) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // Memory API (list, write, delete, purge)
+    if (message && message.type === 'MEMORY_WRITE') {
+        try {
+            try { console.log('AIPG background: got MEMORY_WRITE', message && message.record); } catch { }
+            const ok = queueMemoryWrite(message.record);
+            if (!ok) {
+                try { console.warn('AIPG background: validateMemoryRecord() rejected', message && message.record); } catch { }
+            } else {
+                try { console.log('AIPG background: accepted record id=', message?.record?.id); } catch { }
+            }
+            sendResponse({ success: ok });
+        } catch (e) {
+            try { console.error('AIPG background: MEMORY_WRITE handler error', e); } catch { }
+            sendResponse({ success: false, error: e?.message || 'write-failed' });
+        }
+        return true;
+    }
+    if (message && message.type === 'MEMORY_LIST') {
+        chrome.storage.local.get([MEMORY_KEY], (res) => {
+            sendResponse({ success: true, records: Array.isArray(res[MEMORY_KEY]) ? res[MEMORY_KEY] : [] });
+        });
+        return true;
+    }
+    if (message && message.type === 'MEMORY_DELETE') {
+        const id = message.id;
+        chrome.storage.local.get([MEMORY_KEY], (res) => {
+            const arr = Array.isArray(res[MEMORY_KEY]) ? res[MEMORY_KEY] : [];
+            const next = arr.filter(r => r && r.id !== id);
+            chrome.storage.local.set({ [MEMORY_KEY]: next }, () => sendResponse({ success: true }));
+        });
+        return true;
+    }
+    if (message && message.type === 'MEMORY_PURGE') {
+        chrome.storage.local.set({ [MEMORY_KEY]: [], [PII_INDEX_KEY]: {} }, () => sendResponse({ success: true }));
+        return true;
+    }
+    if (message && message.type === 'PII_FOUND') {
+        try {
+            const { chatId, messageId, link, site, counts } = message;
+            if (!chatId || !messageId || !link) { sendResponse({ success: false, error: 'bad-args' }); return true; }
+            chrome.storage.local.get([PII_INDEX_KEY], (res) => {
+                const map = (res && res[PII_INDEX_KEY]) || {};
+                const rec = map[chatId] || { link, site: site || null, lastTs: 0, items: [] };
+                rec.link = link; if (site) rec.site = site;
+                rec.items.push({ id: messageId, ts: Date.now(), counts: counts || null });
+                rec.lastTs = Date.now();
+                map[chatId] = rec;
+                chrome.storage.local.set({ [PII_INDEX_KEY]: map }, () => sendResponse({ success: true }));
+            });
+        } catch (e) { sendResponse({ success: false, error: e?.message || 'pii-found-failed' }); }
+        return true;
+    }
+    if (message && message.type === 'PII_INDEX_LIST') {
+        chrome.storage.local.get([PII_INDEX_KEY], (res) => {
+            sendResponse({ success: true, data: res && res[PII_INDEX_KEY] ? res[PII_INDEX_KEY] : {} });
+        });
+        return true;
+    }
     if (message.type === 'BOT_DETECT') {
         (async () => {
             try {

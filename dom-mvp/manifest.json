@@ -1,0 +1,24 @@
+{
+    "manifest_version": 3,
+    "name": "AI Privacy Guard (DOM-only, ChatGPT)",
+    "version": "0.1.0",
+    "description": "Detects and redacts PII in the ChatGPT composer with a modal confirmation. DOM-only MVP.",
+    "permissions": [
+        "activeTab",
+        "scripting"
+    ],
+    "host_permissions": [],
+    "content_scripts": [
+        {
+            "matches": [
+                "*://*.openai.com/*",
+                "*://*.chatgpt.com/*"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "css": [],
+            "run_at": "document_start"
+        }
+    ]
+}

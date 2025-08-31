@@ -1,5 +1,5 @@
 // services/classifier.ts - classify requests locally
-import { DB_KEYS, ProviderDB, getLocal, saveService, getExplainCached, setExplainCached } from './db';
+import { DB_KEYS, ProviderDB, getLocal, setLocal, saveService, getExplainCached, setExplainCached } from './db';
 
 declare const chrome: any;
 
@@ -61,7 +61,7 @@ function riskFor(dataTypes: string[], knownProvider?: string | null): 'Low' | 'M
 function explanationFromRules(risk: 'Low' | 'Medium' | 'High', providerName?: string | null, dataTypes: string[] = []): string {
     const base = risk === 'High' ? 'This site may be sending sensitive data to an AI service.'
         : risk === 'Medium' ? 'This site may be sending your data to an AI service.'
-            : 'Limited data appears to be used with AI on-device or minimally.';
+            : 'Limited data may be used with AI on-device or minimally.';
     const provider = providerName ? ` Service: ${providerName}.` : '';
     const kinds = dataTypes.length ? ` Data types: ${dataTypes.join(', ')}.` : '';
     return `${base}${provider}${kinds}`;
@@ -135,6 +135,13 @@ export async function classifyRequest(details: any) {
             lastSeen: Date.now(),
         };
         await saveService(record);
+        // Auto-popup based on threshold (low/medium/high) once per origin; background manages cooldown and single window
+        if (record.isAI && record.origin) {
+            try {
+                const level = String(record.risk || 'Medium').toLowerCase();
+                try { await chrome.runtime.sendMessage({ type: 'AIPG_OPEN_POPUP_FOR_ORIGIN', origin: record.origin, riskLevel: level }); } catch { }
+            } catch { /* ignore */ }
+        }
     } catch {
         // ignore
     }

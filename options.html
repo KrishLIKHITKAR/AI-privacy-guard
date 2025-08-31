@@ -5,6 +5,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Privacy Guard – Settings</title>
+    <link rel="stylesheet" href="options.css" />
+</head>
+
+<body>
+    <h1>AI Privacy Guard – Settings</h1>
     <style>
         body {
             font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
@@ -54,10 +59,7 @@
             margin-left: 8px;
         }
     </style>
-</head>
 
-<body>
-    <h1>AI Privacy Guard – Settings</h1>
     <!-- Cloud features removed: 100% local-only -->
     <div class="row">
         <label for="allowMinutes">Allow once duration (minutes)</label>
@@ -76,6 +78,29 @@
         <div class="muted">You can still Allow once from the modal.</div>
     </div>
     <hr class="row" />
+    <div class="row">
+        <label><input id="autopopupEnabled" type="checkbox" checked /> Enable risk auto‑popup</label>
+        <div class="muted">When risky AI activity is detected, open this popup automatically (cooldown prevents spam).
+        </div>
+    </div>
+    <div class="row">
+        <label for="autopopupThreshold">Auto‑popup threshold</label>
+        <select id="autopopupThreshold">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+        </select>
+        <div class="muted">Choose the minimum risk that should trigger auto‑popup.</div>
+    </div>
+    <div class="row">
+        <label><input id="alwaysMaskEnabled" type="checkbox" checked /> Always mask sensitive info (skip review)</label>
+        <div class="muted">Masks emails, phones, cards, DOB, etc. automatically before sending. You can still change
+            granularity below.</div>
+    </div>
+    <div class="row">
+        <label><input id="autoSendRedacted" type="checkbox" checked /> Auto‑send redacted messages (ChatGPT)</label>
+        <div class="muted">If off, you’ll get a confirmation with a preview before sending the sanitized text.</div>
+    </div>
     <div class="row">
         <label><input id="showDebugRow" type="checkbox" /> Show debug “Why flagged” row in popup</label>
         <div class="muted">When enabled, shows POST/Models/WASM/Passive counters.</div>
@@ -97,10 +122,9 @@ https://sub.domain.com"></textarea>
 
         <button id="export" style="margin-left:8px;background:#6B7280;">Export Logs</button>
         <button id="clear" style="margin-left:8px;background:#EF4444;">Clear Logs</button>
+        <button id="resetCooldown" style="margin-left:8px;background:#2563EB;">Reset autopopup cooldown</button>
         <button id="back" style="margin-left:8px;background:#374151;">Back to Popup</button>
         <span id="status"></span>
     </div>
     <script src="./options.js"></script>
 </body>
-
-</html>

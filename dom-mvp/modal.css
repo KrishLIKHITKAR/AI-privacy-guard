@@ -1,0 +1,139 @@
+/* Scoped modal styles; loaded into Shadow DOM. z-index just below browser UI. */
+:host {
+    all: initial;
+}
+
+.aipg-modal-container {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483646;
+    display: grid;
+    place-items: center;
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+    color: #111827;
+}
+
+.aipg-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(17, 24, 39, 0.45);
+    backdrop-filter: saturate(120%) blur(2px);
+}
+
+.aipg-dialog {
+    position: relative;
+    max-width: 560px;
+    width: min(92vw, 560px);
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.06);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.aipg-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.aipg-icon {
+    font-size: 20px;
+    line-height: 1;
+}
+
+#aipg-title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.aipg-subtle {
+    margin: 0 0 6px 0;
+    color: #4b5563;
+    font-size: 12px;
+}
+
+.aipg-body {
+    display: grid;
+    gap: 8px;
+}
+
+.aipg-preview {
+    width: 100%;
+    min-height: 120px;
+    max-height: 260px;
+    resize: vertical;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    background: #f9fafb;
+    color: #111827;
+}
+
+.aipg-counts {
+    font-size: 12px;
+    color: #374151;
+}
+
+.aipg-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 4px;
+}
+
+.aipg-btn {
+    appearance: none;
+    border: 1px solid #e5e7eb;
+    background: #ffffff;
+    color: #111827;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease, transform 50ms ease;
+}
+
+.aipg-btn:focus {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+}
+
+.aipg-btn:hover {
+    background: #f3f4f6;
+}
+
+.aipg-btn:active {
+    transform: translateY(1px);
+}
+
+.aipg-redacted {
+    background: #111827;
+    color: #fff;
+    border-color: #111827;
+}
+
+.aipg-redacted:hover {
+    background: #1f2937;
+}
+
+.aipg-raw {
+    background: #fef3c7;
+    color: #78350f;
+    border-color: #fde68a;
+}
+
+.aipg-raw:hover {
+    background: #fde68a;
+}
+
+.aipg-cancel {
+    background: #ffffff;
+    color: #111827;
+}

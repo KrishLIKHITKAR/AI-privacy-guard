@@ -2,11 +2,15 @@
     const $ = (id) => document.getElementById(id);
 
     function load() {
-        chrome.storage.local.get(['allowMinutes', 'retentionDays', 'sensitiveDefault', 'showDebugRow', 'aiWhitelist', 'aiClassifierEnabled'], (res) => {
+        chrome.storage.local.get(['allowMinutes', 'retentionDays', 'sensitiveDefault', 'showDebugRow', 'aiWhitelist', 'aiClassifierEnabled', 'autopopupEnabled', 'autopopupThreshold', 'alwaysMaskEnabled', 'autoSendRedacted'], (res) => {
             if (typeof res.allowMinutes === 'number') $('allowMinutes').value = String(res.allowMinutes);
             if (typeof res.retentionDays === 'number') $('retentionDays').value = String(res.retentionDays);
             if (typeof res.sensitiveDefault === 'string') $('sensitiveDefault').value = res.sensitiveDefault;
             $('showDebugRow').checked = !!res.showDebugRow;
+            $('autopopupEnabled').checked = res.autopopupEnabled !== false;
+            if (res.autopopupThreshold) $('autopopupThreshold').value = String(res.autopopupThreshold);
+            $('alwaysMaskEnabled').checked = res.alwaysMaskEnabled !== false;
+            $('autoSendRedacted').checked = res.autoSendRedacted !== false;
             const wl = res.aiWhitelist || {};
             const lines = Object.keys(wl).sort().join('\n');
             $('whitelist').value = lines;
@@ -29,11 +33,15 @@
         const retentionDays = Math.max(1, Math.min(30, Number($('retentionDays').value || 7)));
         const sensitiveDefault = $('sensitiveDefault').value === 'ask' ? 'ask' : 'block';
         const showDebugRow = $('showDebugRow').checked;
+        const autopopupEnabled = $('autopopupEnabled').checked;
+        const autopopupThreshold = $('autopopupThreshold').value || 'medium';
+        const alwaysMaskEnabled = $('alwaysMaskEnabled').checked;
         const aiClassifierEnabled = $('aiClassifierEnabled').checked;
+        const autoSendRedacted = $('autoSendRedacted').checked;
         const wlText = $('whitelist').value || '';
         const wlMap = {};
         wlText.split(/\r?\n/).map(s => s.trim()).filter(Boolean).forEach(origin => { wlMap[origin] = true; });
-        chrome.storage.local.set({ allowMinutes, retentionDays, sensitiveDefault, showDebugRow, aiWhitelist: wlMap, aiClassifierEnabled }, () => setStatus('ok', 'Saved'));
+        chrome.storage.local.set({ allowMinutes, retentionDays, sensitiveDefault, showDebugRow, autopopupEnabled, autopopupThreshold, alwaysMaskEnabled, aiWhitelist: wlMap, aiClassifierEnabled, autoSendRedacted }, () => setStatus('ok', 'Saved'));
     }
 
     function exportLogs() {
@@ -58,6 +66,11 @@
             else setStatus('err', 'Failed to clear', 2500);
         });
     }
+    function resetCooldown() {
+        const status = $('status');
+        status.textContent = 'Resetting…';
+        chrome.storage.local.set({ aipgAutopopup: {} }, () => setStatus('ok', 'Cooldown reset', 1500));
+    }
     function backToPopup() {
         try {
             // Try to close this tab and open the extension popup by focusing the browserAction
@@ -72,6 +85,7 @@
         const ex = $('export'); if (ex) ex.addEventListener('click', exportLogs);
         const cl = $('clear'); if (cl) cl.addEventListener('click', clearLogs);
         const bk = $('back'); if (bk) bk.addEventListener('click', backToPopup);
+        const rc = $('resetCooldown'); if (rc) rc.addEventListener('click', resetCooldown);
         load();
     });
 })();

@@ -1,0 +1,100 @@
+body {
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    margin: 0;
+    background: #f8fafc;
+    color: #0f172a
+}
+
+.wrap {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 20px
+}
+
+h1 {
+    font-size: 20px;
+    margin: 0 0 12px 0
+}
+
+.toolbar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 12px
+}
+
+input,
+select,
+button {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px
+}
+
+button {
+    background: #0f172a;
+    color: #fff;
+    border-color: #0f172a;
+    cursor: pointer
+}
+
+button.secondary {
+    background: #64748b;
+    border-color: #64748b
+}
+
+button.danger {
+    background: #ef4444;
+    border-color: #ef4444
+}
+
+.table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0
+}
+
+.table th,
+.table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #e2e8f0;
+    font-size: 12px;
+    vertical-align: top
+}
+
+.table th {
+    background: #f1f5f9;
+    text-align: left;
+    position: sticky;
+    top: 0
+}
+
+.badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    background: #f1f5f9;
+    color: #0f172a
+}
+
+.badge.raw {
+    background: #fef3c7;
+    color: #92400e
+}
+
+.counts {
+    font-family: ui-monospace, Menlo, Consolas, monospace
+}
+
+.group {
+    font-weight: 600;
+    color: #334155;
+    background: #e2e8f01a;
+    padding: 6px 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    margin-top: 12px
+}

@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
+import { GranularityPanel } from './components/GranularityPanel.tsx';
+import { MemoryPanel } from './components/MemoryPanel.tsx';
 
 declare const chrome: any;
 
@@ -19,18 +21,35 @@ function Popup() {
     const [policy, setPolicy] = useState<{ url: string | null; summary: string; riskHighlights: string[] } | null>(null);
     const [policyLoading, setPolicyLoading] = useState(false);
     const [showDebug, setShowDebug] = useState(false);
+    const [showAdvanced, setShowAdvanced] = useState(true); // default to open for easier access
+    const [autopopupOn, setAutopopupOn] = useState<boolean>(true);
 
     useEffect(() => {
         try {
-            chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
-                const url = tabs?.[0]?.url || '';
-                try { const o = new URL(url).origin; setOrigin(o); } catch { setOrigin(''); }
-                if (!/^https?:\/\//i.test(url)) return;
-                chrome.runtime.sendMessage({ type: 'GET_SERVICES_FOR_ORIGIN', origin: new URL(url).origin }, (res: any) => {
+            const u = new URL(window.location.href);
+            const qOrigin = u.searchParams.get('origin') || '';
+            const useQuery = qOrigin && /^https?:/i.test(qOrigin);
+            const adv = u.searchParams.get('advanced');
+            if (adv === '1') setShowAdvanced(true);
+            if (useQuery) {
+                setOrigin(qOrigin);
+                chrome.runtime.sendMessage({ type: 'GET_SERVICES_FOR_ORIGIN', origin: qOrigin }, (res: any) => {
                     if (res?.success && Array.isArray(res.data)) setServices(res.data);
                 });
+            } else {
+                chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+                    const url = tabs?.[0]?.url || '';
+                    try { const o = new URL(url).origin; setOrigin(o); } catch { setOrigin(''); }
+                    if (!/^https?:\/\//i.test(url)) return;
+                    chrome.runtime.sendMessage({ type: 'GET_SERVICES_FOR_ORIGIN', origin: new URL(url).origin }, (res: any) => {
+                        if (res?.success && Array.isArray(res.data)) setServices(res.data);
+                    });
+                });
+            }
+            chrome.storage.local.get(['showDebugRow', 'autopopupEnabled'], (r: any) => {
+                setShowDebug(!!r?.showDebugRow);
+                setAutopopupOn(r?.autopopupEnabled !== false);
             });
-            chrome.storage.local.get(['showDebugRow'], (r: any) => setShowDebug(!!r?.showDebugRow));
         } catch { }
     }, []);
 
@@ -38,14 +57,34 @@ function Popup() {
         <div className="p-4 text-sm font-sans" style={{ minWidth: 380 }}>
             <div className="flex items-center justify-between mb-2">
                 <h1 className="text-lg font-bold">AI Privacy Guard</h1>
-                <button className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200" onClick={() => {
-                    if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
-                    else window.open('options.html', '_blank');
-                }}>Settings</button>
+                <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-2 text-[11px] text-gray-600 select-none" title="Auto-open popup on risky AI activity">
+                        <span>Auto-popup</span>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={autopopupOn}
+                            onClick={() => {
+                                const on = !autopopupOn;
+                                setAutopopupOn(on);
+                                try { chrome.storage.local.set({ autopopupEnabled: on }); } catch { }
+                            }}
+                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 ${autopopupOn ? 'bg-green-500' : 'bg-gray-300'}`}
+                        >
+                            <span
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-200 ${autopopupOn ? 'translate-x-4' : 'translate-x-1'}`}
+                            />
+                        </button>
+                    </label>
+                    <button className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200" onClick={() => {
+                        if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
+                        else window.open('options.html', '_blank');
+                    }}>Settings</button>
+                </div>
             </div>
             {origin ? <div className="text-gray-600 mb-3">Site: {origin}</div> : null}
             {services.length === 0 ? (
-                <div className="text-gray-600">No AI services detected yet on this page.</div>
+                <div className="text-gray-600">No AI services detected yet on this page (or signals are insufficient).</div>
             ) : (
                 <ul className="space-y-2">
                     {services.map((s, idx) => (
@@ -79,7 +118,8 @@ function Popup() {
                                         try {
                                             const tab: any = await new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => resolve(tabs?.[0] || null)));
                                             const siteUrl = tab?.url || '';
-                                            chrome.runtime.sendMessage({ type: 'FETCH_POLICY', siteUrl }, async (res2: any) => {
+                                            const site = origin || siteUrl;
+                                            chrome.runtime.sendMessage({ type: 'FETCH_POLICY', siteUrl: site }, async (res2: any) => {
                                                 const text = (res2?.fullText || res2?.excerpt || '').slice(0, 4000);
                                                 const url = res2?.url || null;
                                                 const bullets = [] as string[];
@@ -136,6 +176,24 @@ function Popup() {
                     </div>
                 ) : (
                     <div className="text-[11px] text-gray-500">Finds and summarizes the site’s privacy policy locally.</div>
+                )}
+            </div>
+            <div className="mt-3 border-t pt-3">
+                <div className="flex items-center justify-between mb-2">
+                    <div className="font-medium">Advanced</div>
+                    <button className="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200" onClick={() => setShowAdvanced(v => !v)}>{showAdvanced ? 'Hide' : 'Show'}</button>
+                </div>
+                {showAdvanced && (
+                    <div className="space-y-4">
+                        <div>
+                            <div className="text-sm font-medium mb-1">Granularity controls</div>
+                            <GranularityPanel />
+                        </div>
+                        <div>
+                            <div className="text-sm font-medium mb-1">Memory viewer</div>
+                            <MemoryPanel />
+                        </div>
+                    </div>
                 )}
             </div>
             <div className="text-[11px] text-gray-500 mt-3">

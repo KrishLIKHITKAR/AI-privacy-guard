@@ -21,7 +21,7 @@ function buildHeaderLine(input: PermissionSummarizationInput): string {
     if (!ai) {
         return 'No active AI usage detected on this page';
     }
-    const lead = 'This site uses AI and is accessing';
+    const lead = 'This page may be using AI and is accessing';
     return `${lead}: ${parts.join(", ")}`;
 }
 
@@ -91,7 +91,7 @@ export function analyzePermissionLocal(input: PermissionSummarizationInput): Per
     const intent = (input.ai_intent || "analyze page").trim();
     const ai = !!input.context?.ai_detected;
     const summary_one_liner = ai
-        ? `Wants AI to ${intent}.`.slice(0, 120)
+        ? `May use AI to ${intent}.`.slice(0, 120)
         : `No active AI usage detected; read-only analysis.`;
 
     // Bullets

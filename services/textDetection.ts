@@ -69,8 +69,6 @@ async function getPipeline(model?: string): Promise<any> {
     const { pipeline } = await import('@xenova/transformers');
     _pipeline = await pipeline('text-classification', chosenModel, {
         quantized: true,
-        // allow multiple labels
-        topk: 2,
     });
     return _pipeline;
 }

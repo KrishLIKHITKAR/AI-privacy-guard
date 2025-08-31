@@ -57,3 +57,80 @@ export interface PolicySummaryInput {
 export interface PolicySummaryOutput {
     summary_points: string[];
 }
+
+// New shared types for features #3, #4, #5, #7, #8
+export type ProcessingLocation = 'cloud' | 'on_device' | 'unknown';
+export type SiteCategory =
+    | 'banking' | 'healthcare' | 'government' | 'education'
+    | 'work' | 'developer' | 'ecommerce' | 'social' | 'news' | 'general';
+
+export interface AIDetectionContext {
+    origin: string;
+    tabId?: number;
+    processing: ProcessingLocation;
+    trackersPresent: boolean;
+    siteCategory: SiteCategory;
+    piiSummary?: PIISummary;
+}
+
+export type RiskLevel = 'low' | 'medium' | 'high';
+
+export interface RiskAssessment {
+    level: RiskLevel;
+    score: number; // 0-100
+    redFlags: string[]; // concrete reasons
+    factors: Record<string, number>; // factor->contribution
+}
+
+export interface Redaction {
+    type: string;             // e.g., 'email', 'cc', 'api_key'
+    value: string;            // original snippet
+    replacement: string;      // tokenized/masked form
+    start: number;
+    end: number;
+    confidence: number;       // 0-1
+}
+
+export interface PIISummary {
+    counts: Record<string, number>; // type->count
+}
+
+export interface SanitizationResult {
+    original: string;
+    sanitized: string;
+    redactions: Redaction[];
+    piiSummary: PIISummary;
+}
+
+export interface GranularityPolicy {
+    dataType: string; // 'email' | 'phone' | 'address' | 'card' | ...
+    level: string;    // 'domain_only' | 'last_4' | 'city_only' | ...
+    apply(value: string): string;
+}
+
+export interface SessionDecision {
+    action: 'allow' | 'block' | 'rewrite';
+    reason?: string;
+    rewrittenBody?: string | ArrayBuffer;
+}
+
+export interface MemoryRecord {
+    id: string;
+    tabId?: number;
+    origin: string;
+    ts: number;
+    direction: 'prompt' | 'response';
+    sessionId: string; // per-tab isolation id
+    risk?: RiskAssessment;
+    pii?: PIISummary;
+    excerpt: string; // small snippet only (<= 256 chars)
+}
+
+export interface FeatureFlags {
+    riskEngineEnabled: boolean;
+    sanitizationEnabled: boolean;
+    granularityEnabled: boolean;
+    sessionSanitizerEnabled: boolean;
+    memoryCenterEnabled: boolean;
+    useLocalAIForExplanations: boolean;
+}

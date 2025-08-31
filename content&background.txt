@@ -2,14 +2,6 @@
 
 console.log(`AI Privacy Guard content script loaded on page: ${location.href}`);
 
-// Add a global debug flag for memory tracking
-try {
-    if (!window.__aipgDebugMemory) {
-        window.__aipgDebugMemory = true;
-        console.log('AIPG → content: Memory debug enabled');
-    }
-} catch { }
-
 // Bridge: handle in-page sanitize requests (inpage.js -> content.js -> service)
 try {
     const NS = 'aipg';
@@ -360,19 +352,8 @@ try {
                                 const excerpt = safeExcerptRedacted(String(original || '')).slice(0, 240);
                                 const piiCounts = { EMAIL: (original.match(EMAIL_REGEX) || []).length, PHONE: (original.match(PHONE_REGEX) || []).length, CARD: 0, APIKEY: 0 };
                                 const id = (self.crypto && typeof crypto.randomUUID === 'function') ? crypto.randomUUID() : String(Date.now());
-                                const record = { id, ts: Date.now(), site, conversationUrl: cu, origin: location.origin, sessionId: getSessionId(), direction: 'prompt', rawAllowed: true, excerpt, piiCounts };
-                                try { console.log('AIPG → content: sending MEMORY_WRITE (prompt)', record); } catch { }
-                                chrome.runtime.sendMessage({ type: 'MEMORY_WRITE', record }, (resp) => {
-                                    try {
-                                        console.log('AIPG → content: MEMORY_WRITE response', resp);
-                                        if (!resp || !resp.success) {
-                                            console.error('AIPG → content: MEMORY_WRITE failed', resp);
-                                        }
-                                    } catch { }
-                                });
-                            } catch (err) {
-                                try { console.error('AIPG → content: MEMORY_WRITE send failed', err); } catch { }
-                            }
+                                chrome.runtime.sendMessage({ type: 'MEMORY_WRITE', record: { id, ts: Date.now(), site, conversationUrl: cu, origin: location.origin, sessionId: getSessionId(), direction: 'prompt', rawAllowed: true, excerpt, piiCounts } });
+                            } catch { }
                             await nextFrame();
                             btn.__aipgBypassNextClick = true;
                             try { btn.click(); } catch { dispatchEnter(el); }
@@ -386,13 +367,14 @@ try {
         // Debounce helper
         function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
-        function conversationUrlFromLocation() { try { return location.href; } catch { return location.href; } }
-
-        async function writeMemory(record) {
-            return await new Promise((resolve) => {
-                try { chrome.runtime.sendMessage({ type: 'MEMORY_WRITE', record }, (resp) => resolve(!!(resp && resp.success))); }
-                catch { resolve(false); }
-            });
+        function conversationUrlFromLocation() {
+            try {
+                const u = new URL(location.href);
+                // chat.openai.com or chatgpt.com conversation path
+                const m = u.pathname.match(/\/c\/([0-9a-f\-]{10,})/i);
+                if (m) return `${u.origin}/c/${m[1]}`;
+                return u.href;
+            } catch { return location.href; }
         }
 
         function safeExcerptRedacted(text) {
@@ -405,9 +387,17 @@ try {
             } catch { return String(text || ''); }
         }
 
-        function getSessionId() { try { return window.__aipgSessionId || (window.__aipgSessionId = (self.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()))); } catch { return String(Date.now()); } }
-
-        function setupConversationIdWatcher() { /* no-op after rollback */ }
+        function getSessionId() {
+            try {
+                if (window.__aipgSessionId) return String(window.__aipgSessionId);
+                // Try to derive from conversation id
+                const cu = conversationUrlFromLocation();
+                const m = cu.match(/\/c\/([0-9a-f\-]{10,})/i);
+                const sid = m ? m[1] : (self.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+                window.__aipgSessionId = sid;
+                return sid;
+            } catch { return String(Date.now()); }
+        }
 
         async function handleDecision(el, kind, sanitized) {
             try {
@@ -427,13 +417,8 @@ try {
                         const excerpt = safeExcerptRedacted(String(original || '')).slice(0, 240);
                         const piiCounts = { EMAIL: (original.match(EMAIL_REGEX) || []).length, PHONE: (original.match(PHONE_REGEX) || []).length, CARD: 0, APIKEY: 0 };
                         const id = (self.crypto && typeof crypto.randomUUID === 'function') ? crypto.randomUUID() : String(Date.now());
-                        const record = { id, ts: Date.now(), site, conversationUrl: cu, origin: location.origin, sessionId: getSessionId(), direction: 'prompt', rawAllowed: true, excerpt, piiCounts };
-                        try { console.log('AIPG → content: writing MEMORY (prompt)', record); } catch { }
-                        await writeMemory(record);
-                        try { setupConversationIdWatcher(); } catch { }
-                    } catch (err) {
-                        try { console.error('AIPG → content: MEMORY_WRITE send failed', err); } catch { }
-                    }
+                        chrome.runtime.sendMessage({ type: 'MEMORY_WRITE', record: { id, ts: Date.now(), site, conversationUrl: cu, origin: location.origin, sessionId: getSessionId(), direction: 'prompt', rawAllowed: true, excerpt, piiCounts } });
+                    } catch { }
                     if (!clickSend()) dispatchEnter(el);
                 }
             } catch (e) { log('decision err', e); }
@@ -540,7 +525,7 @@ try {
             if (window.__aipgRespObs) return;
             const recent = new Set();
             const remember = (k) => { recent.add(k); if (recent.size > 30) recent.delete(Array.from(recent)[0]); };
-            const obs = new MutationObserver(async (mutList) => {
+            const obs = new MutationObserver((mutList) => {
                 for (const m of mutList) {
                     const tgt = m.target instanceof Element ? m.target : null;
                     if (!tgt) continue;
@@ -552,12 +537,8 @@ try {
                             remember(key);
                             try {
                                 const id = (self.crypto && typeof crypto.randomUUID === 'function') ? crypto.randomUUID() : String(Date.now());
-                                const record = { id, ts: Date.now(), site: location.hostname, conversationUrl: conversationUrlFromLocation(), origin: location.origin, sessionId: getSessionId(), direction: 'response', excerpt: txt };
-                                try { console.log('AIPG → content: writing MEMORY (response)', record); } catch { }
-                                await writeMemory(record);
-                            } catch (err) {
-                                try { console.error('AIPG → content: MEMORY_WRITE send failed', err); } catch { }
-                            }
+                                chrome.runtime.sendMessage({ type: 'MEMORY_WRITE', record: { id, ts: Date.now(), site: location.hostname, conversationUrl: conversationUrlFromLocation(), origin: location.origin, sessionId: getSessionId(), direction: 'response', excerpt: txt } });
+                            } catch { }
                         }
                     }
                 }
@@ -1193,3 +1174,490 @@ function renderInboundSignalBanner(ok) {
     } catch (e) { }
 }
 
+
+
+background.js-
+
+
+// background.js
+
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+
+// ---------------- Local Memory (ChatGPT-specific) ----------------
+const MEMORY_KEY = 'aipgMemoryRecords';
+const PII_INDEX_KEY = 'aipgPiiIndex'; // { [sessionId]: { link, site, lastTs, items: Array<{ id, ts, counts }> } }
+let __writeQueue = [];
+let __writeTimer = null;
+
+function validateMemoryRecord(r) {
+    try {
+        if (!r || typeof r !== 'object') return false;
+        if (!r.id || typeof r.id !== 'string') return false;
+        if (!r.ts || typeof r.ts !== 'number') return false;
+        if (!r.site || typeof r.site !== 'string') return false;
+        if (!r.conversationUrl || typeof r.conversationUrl !== 'string') return false;
+        if (r.direction !== 'prompt' && r.direction !== 'response') return false;
+        if (typeof r.excerpt !== 'string') return false;
+        if (r.direction === 'prompt') {
+            // rawAllowed required for prompt, piiCounts object expected
+            if (typeof r.rawAllowed !== 'boolean') return false;
+            if (!r.piiCounts || typeof r.piiCounts !== 'object') r.piiCounts = { EMAIL: 0, PHONE: 0, CARD: 0, APIKEY: 0 };
+        }
+        // clamp sizes
+        if (r.direction === 'prompt') r.excerpt = String(r.excerpt).slice(0, 240);
+        if (r.direction === 'response') r.excerpt = String(r.excerpt).slice(0, 500);
+        return true;
+    } catch { return false; }
+}
+
+function flushMemoryQueue() {
+    clearTimeout(__writeTimer); __writeTimer = null;
+    const batch = __writeQueue.splice(0, __writeQueue.length);
+    if (batch.length === 0) return;
+    chrome.storage.local.get([MEMORY_KEY], (res) => {
+        const arr = Array.isArray(res[MEMORY_KEY]) ? res[MEMORY_KEY] : [];
+        const next = arr.concat(batch);
+        // keep only most recent 500
+        next.sort((a, b) => a.ts - b.ts);
+        const capped = next.slice(Math.max(0, next.length - 500));
+        chrome.storage.local.set({ [MEMORY_KEY]: capped });
+    });
+}
+
+function queueMemoryWrite(record) {
+    if (!validateMemoryRecord(record)) return false;
+    __writeQueue.push(record);
+    // In MV3 service workers, timers can be unreliable due to suspension.
+    // Flush immediately to ensure durability.
+    if (__writeTimer) { clearTimeout(__writeTimer); __writeTimer = null; }
+    flushMemoryQueue();
+    return true;
+}
+
+async function getApiKey() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(["GEMINI_API_KEY"], (result) => {
+            resolve(result.GEMINI_API_KEY || null);
+        });
+    });
+}
+
+// --- Local 7-day logs ---
+function withLogs(cb) {
+    chrome.storage.local.get(['aiLogs', 'retentionDays'], (res) => {
+        const now = Date.now();
+        const days = (typeof res.retentionDays === 'number' ? res.retentionDays : 7);
+        const windowMs = days * 24 * 60 * 60 * 1000;
+        const arr = (res.aiLogs || []).filter((e) => e && e.time && (now - e.time) <= windowMs);
+        cb(arr);
+    });
+}
+function saveLogs(arr, done) {
+    chrome.storage.local.set({ aiLogs: arr }, done);
+}
+
+// Minimal PII redaction for any outbound cloud prompts
+function redactPII(text) {
+    try {
+        if (typeof text !== 'string') return text;
+        let t = text;
+        // Emails
+        t = t.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[REDACTED:EMAIL]');
+        // Phone numbers (US-style variants)
+        t = t.replace(/\b(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}\b/g, '[REDACTED:PHONE]');
+        // SSN
+        t = t.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED:SSN]');
+        // Credit/Debit card numbers (13-19 digits, allowing spaces/dashes)
+        t = t.replace(/\b(?:\d[ -]*?){13,19}\b/g, '[REDACTED:CARD]');
+        // IPv4
+        t = t.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[REDACTED:IP]');
+        // Government/ID numbers (heuristic)
+        t = t.replace(/\b(passport|driver'?s?\s*license|dl\s*number|national\s*id)[:#]?\s*[A-Z0-9-]+\b/gi, '[REDACTED:ID]');
+        // Strip URL query strings to avoid leaking tokens/ids
+        t = t.replace(/https?:\/\/[^\s"']+/gi, (m) => {
+            try {
+                const u = new URL(m);
+                return `${u.origin}${u.pathname}`; // drop search/hash
+            } catch {
+                return m;
+            }
+        });
+        return t;
+    } catch {
+        return text;
+    }
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // Memory API (list, write, delete, purge)
+    if (message && message.type === 'MEMORY_WRITE') {
+        try {
+            const ok = queueMemoryWrite(message.record);
+            sendResponse({ success: ok });
+        } catch (e) {
+            sendResponse({ success: false, error: e?.message || 'write-failed' });
+        }
+        return true;
+    }
+    if (message && message.type === 'MEMORY_LIST') {
+        chrome.storage.local.get([MEMORY_KEY], (res) => {
+            sendResponse({ success: true, records: Array.isArray(res[MEMORY_KEY]) ? res[MEMORY_KEY] : [] });
+        });
+        return true;
+    }
+    if (message && message.type === 'MEMORY_DELETE') {
+        const id = message.id;
+        chrome.storage.local.get([MEMORY_KEY], (res) => {
+            const arr = Array.isArray(res[MEMORY_KEY]) ? res[MEMORY_KEY] : [];
+            const next = arr.filter(r => r && r.id !== id);
+            chrome.storage.local.set({ [MEMORY_KEY]: next }, () => sendResponse({ success: true }));
+        });
+        return true;
+    }
+    if (message && message.type === 'MEMORY_PURGE') {
+        chrome.storage.local.set({ [MEMORY_KEY]: [], [PII_INDEX_KEY]: {} }, () => sendResponse({ success: true }));
+        return true;
+    }
+    if (message && message.type === 'PII_FOUND') {
+        try {
+            const { chatId, messageId, link, site, counts } = message;
+            if (!chatId || !messageId || !link) { sendResponse({ success: false, error: 'bad-args' }); return true; }
+            chrome.storage.local.get([PII_INDEX_KEY], (res) => {
+                const map = (res && res[PII_INDEX_KEY]) || {};
+                const rec = map[chatId] || { link, site: site || null, lastTs: 0, items: [] };
+                rec.link = link; if (site) rec.site = site;
+                rec.items.push({ id: messageId, ts: Date.now(), counts: counts || null });
+                rec.lastTs = Date.now();
+                map[chatId] = rec;
+                chrome.storage.local.set({ [PII_INDEX_KEY]: map }, () => sendResponse({ success: true }));
+            });
+        } catch (e) { sendResponse({ success: false, error: e?.message || 'pii-found-failed' }); }
+        return true;
+    }
+    if (message && message.type === 'PII_INDEX_LIST') {
+        chrome.storage.local.get([PII_INDEX_KEY], (res) => {
+            sendResponse({ success: true, data: res && res[PII_INDEX_KEY] ? res[PII_INDEX_KEY] : {} });
+        });
+        return true;
+    }
+    if (message.type === 'BOT_DETECT') {
+        (async () => {
+            try {
+                // Run in the page context to access navigator/window signals
+                const tabId = sender?.tab?.id;
+                if (!tabId) throw new Error('No active tab for bot detection');
+                const [{ result }] = await chrome.scripting.executeScript({
+                    target: { tabId },
+                    func: async () => {
+                        try {
+                            const anyGlobal = globalThis;
+                            // Inline minimal heuristic + optional global botd
+                            async function detect() {
+                                try {
+                                    if (anyGlobal && anyGlobal.botd && typeof anyGlobal.botd.load === 'function') {
+                                        const botd = await anyGlobal.botd.load();
+                                        const r = await botd.detect();
+                                        const bot = r?.bot || {};
+                                        const isBot = String(bot.result || '').toLowerCase() === 'bot';
+                                        const confidence = typeof bot.probability === 'number' ? Math.max(0, Math.min(1, bot.probability)) : (isBot ? 0.8 : 0.6);
+                                        return { isBot, confidence, signals: { type: bot.type, probability: bot.probability, requestId: r?.requestId, raw: bot } };
+                                    }
+                                } catch { }
+
+                                const nav = navigator;
+                                const signals = {
+                                    webdriver: !!nav.webdriver,
+                                    pluginsLength: (nav.plugins && nav.plugins.length) || 0,
+                                    languagesLength: (nav.languages && nav.languages.length) || 0,
+                                    hardwareConcurrency: (nav.hardwareConcurrency || 0),
+                                    deviceMemory: (nav.deviceMemory || 0),
+                                    userAgent: (nav.userAgent || ''),
+                                };
+                                let score = 0;
+                                if (signals.webdriver) score += 0.6;
+                                if (signals.pluginsLength === 0) score += 0.1;
+                                if (signals.languagesLength === 0) score += 0.1;
+                                if (/headless|puppeteer|playwright/i.test(signals.userAgent)) score += 0.6;
+                                const isBot = score >= 0.6;
+                                const confidence = Math.max(0.2, Math.min(1, score));
+                                return { isBot, confidence, signals };
+                            }
+                            return await detect();
+                        } catch (e) {
+                            return { isBot: false, confidence: 0.5, signals: { error: e?.message || 'botd-failed' } };
+                        }
+                    },
+                });
+                sendResponse({ success: true, data: result });
+            } catch (err) {
+                sendResponse({ success: false, error: err?.message || String(err) });
+            }
+        })();
+        return true;
+    }
+    if (message.type === 'SUMMARIZE_POLICY_ONDEVICE') {
+        (async () => {
+            try {
+                const { excerpt } = message;
+                if (!excerpt || typeof excerpt !== 'string' || !excerpt.trim()) {
+                    sendResponse({ success: true, summary: 'No clear privacy/AI policy found. This can be risky.' });
+                    return;
+                }
+                // Placeholder for Chrome on-device AI (if exposed in the future).
+                // For now, just return the first 3 heuristic bullets similarly to rulesEngine.
+                const text = excerpt.replace(/\s+/g, ' ').trim();
+                const points = [];
+                if (/do\s+not\s+sell|don't\s+sell|opt[- ]?out/i.test(text)) points.push('Mentions opt-out or “do not sell” options.');
+                if (/third[- ]?part(y|ies)|share with/i.test(text)) points.push('Shares data with third parties.');
+                if (/retain|retention|store for/i.test(text)) points.push('Specifies data retention.');
+                if (/advertis|marketing|personaliz/i.test(text)) points.push('Uses data for advertising/marketing.');
+                if (/ai|machine\s*learning|model/i.test(text)) points.push('References AI/model usage.');
+                if (/cookie|tracking|analytics/i.test(text)) points.push('Mentions cookies/analytics tracking.');
+                const out = points.slice(0, 3).join(' ');
+                sendResponse({ success: true, summary: out || text.slice(0, 300) });
+            } catch (err) {
+                sendResponse({ success: false, error: err?.message || String(err) });
+            }
+        })();
+        return true;
+    }
+    if (message.type === 'LOG_EVENT') {
+        withLogs((arr) => {
+            arr.push(message.entry);
+            saveLogs(arr, () => sendResponse({ success: true }));
+        });
+        return true;
+    }
+    if (message.type === 'EXPORT_LOGS') {
+        withLogs((arr) => {
+            sendResponse({ success: true, data: arr });
+        });
+        return true;
+    }
+    if (message.type === 'FETCH_POLICY') {
+        (async () => {
+            try {
+                const policyUrl = (message && typeof message.url === 'string' && message.url) || null;
+                const siteUrl = (message && typeof message.siteUrl === 'string' && message.siteUrl) || null;
+                const full = !!(message && message.full);
+                const origin = (() => {
+                    try {
+                        if (siteUrl) return new URL(siteUrl).origin;
+                        return new URL(sender?.url || '').origin;
+                    } catch { return null; }
+                })();
+
+                // Guard: only allow http/https
+                const isHttp = (u) => {
+                    try { const x = new URL(u); return x.protocol === 'http:' || x.protocol === 'https:'; } catch { return false; }
+                };
+                if ((policyUrl && !isHttp(policyUrl)) || (origin && !isHttp(origin + '/'))) {
+                    sendResponse({ success: true, excerpt: '', url: null, skipped: true });
+                    return;
+                }
+
+                // Simple cache (24h TTL) keyed by URL or origin
+                const cacheKey = policyUrl || `${origin}/__auto_policy`;
+                const cache = await new Promise(resolve => chrome.storage.local.get(['policyCache'], res => resolve(res.policyCache || {})));
+                const cached = cache[cacheKey];
+                const ttlMs = 24 * 60 * 60 * 1000;
+                if (cached && cached.ts && (Date.now() - cached.ts) < ttlMs) {
+                    sendResponse({ success: true, excerpt: cached.excerpt, cached: true });
+                    return;
+                }
+
+                // Helper: fetch a URL and extract readable text
+                async function fetchAndExtract(u) {
+                    const res = await fetch(u, { method: 'GET' });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const html = await res.text();
+                    // Remove scripts/styles/noscript
+                    let t = html.replace(/<script[\s\S]*?<\/script>/gi, ' ')
+                        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+                        .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ');
+                    // Keep headings and paragraphs markers to preserve boundaries
+                    t = t.replace(/<\/(h1|h2|h3|p|li)>/gi, '\n')
+                        .replace(/<br\s*\/?>/gi, '\n');
+                    // Strip all other tags
+                    t = t.replace(/<[^>]+>/g, ' ');
+                    // Decode a few common entities
+                    t = t.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+                    // Collapse whitespace
+                    t = t.replace(/[\t\r]+/g, ' ').replace(/\s*\n\s*/g, '\n').replace(/\n{2,}/g, '\n').replace(/\s{2,}/g, ' ').trim();
+                    // Focus around typical headings
+                    const lower = t.toLowerCase();
+                    const markers = ['privacy policy', 'privacy notice', 'data protection', 'política de privacidad', 'politique de confidentialité', 'datenschutz'];
+                    let start = 0;
+                    for (const m of markers) {
+                        const i = lower.indexOf(m);
+                        if (i >= 0) { start = Math.max(0, i - 200); break; }
+                    }
+                    const excerpt = t.slice(start, start + 4000); // up to ~4k chars for better summary
+                    const fullText = t.slice(0, 100000); // cap ~100k chars
+                    return { excerpt, fullText };
+                }
+
+                async function discoverPolicyFromOrigin() {
+                    if (!origin) throw new Error('No origin and URL provided');
+                    if (!isHttp(origin + '/')) throw new Error('Non-http origin');
+                    const bases = [origin];
+                    const paths = [
+                        '/privacy', '/privacy-policy', '/legal/privacy',
+                        '/policies/privacy', '/privacy.html', '/privacypolicy',
+                        '/terms/privacy', '/legal', '/terms-and-privacy',
+                        '/privacy-notice', '/data-protection', '/gdpr',
+                        '/en/privacy', '/en/privacy-policy', '/policy/privacy'
+                    ];
+                    for (const b of bases) {
+                        for (const p of paths) {
+                            const u = b + p;
+                            try {
+                                const ex = await fetchAndExtract(u);
+                                return { url: u, excerpt: ex.excerpt, fullText: ex.fullText };
+                            } catch (_) { /* try next */ }
+                        }
+                    }
+                    throw new Error('Policy not found via auto-discovery');
+                }
+
+                let finalUrl = policyUrl;
+                let excerpt;
+                let fullText;
+                try {
+                    if (finalUrl) {
+                        const data = await fetchAndExtract(finalUrl);
+                        excerpt = data.excerpt;
+                        fullText = data.fullText;
+                    } else {
+                        const found = await discoverPolicyFromOrigin();
+                        finalUrl = found.url;
+                        excerpt = found.excerpt;
+                        fullText = found.fullText;
+                    }
+                } catch (e) {
+                    // Last resort: return empty excerpt
+                    excerpt = '';
+                    fullText = '';
+                }
+
+                // Save cache
+                try {
+                    const k = finalUrl || cacheKey;
+                    const next = Object.assign({}, cache, { [k]: { ts: Date.now(), excerpt, fullText } });
+                    chrome.storage.local.set({ policyCache: next }, () => { });
+                } catch { }
+
+                const payload = { success: true, excerpt, url: finalUrl };
+                if (full) payload.fullText = fullText;
+                sendResponse(payload);
+            } catch (err) {
+                sendResponse({ success: false, error: err?.message || String(err) });
+            }
+        })();
+        return true;
+    }
+    if (message.type === 'CLEAR_LOGS') {
+        saveLogs([], () => sendResponse({ success: true }));
+        return true;
+    }
+    if (message.type === "TEST_GEMINI_KEY") {
+        (async () => {
+            try {
+                const apiKey = await getApiKey();
+                if (!apiKey) throw new Error("Missing Gemini API key.");
+                const url = `${GEMINI_API_URL}?key=${apiKey}`; // GET models listing
+                const res = await fetch(url, { method: "GET" });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+                sendResponse({ success: true });
+            } catch (err) {
+                sendResponse({ success: false, error: err.message || String(err) });
+            }
+        })();
+        return true;
+    }
+    if (message.type === "CALL_GEMINI") {
+        (async () => {
+            try {
+                const apiKey = await getApiKey();
+                if (!apiKey) {
+                    throw new Error("Missing Gemini API key. Set it in extension settings.");
+                }
+                const { model, prompt, systemInstruction, responseSchema, site_url, is_sensitive } = message;
+
+                // Cloud toggle
+                const { cloudEnabled } = await new Promise((resolve) => {
+                    chrome.storage.local.get(['cloudEnabled'], (res) => resolve({ cloudEnabled: !!res.cloudEnabled }));
+                });
+                if (!cloudEnabled) {
+                    throw new Error('Cloud analysis disabled in settings.');
+                }
+
+                // Enforcement: block cloud calls on sensitive sites unless explicitly allowed once
+                const origin = (() => { try { return new URL(site_url || '').origin; } catch { return null; } })();
+                if (is_sensitive && origin) {
+                    const decision = await new Promise((resolve) => {
+                        chrome.storage.local.get(['siteDecisions', 'allowMinutes', 'sensitiveDefault'], (res) => {
+                            const map = res.siteDecisions || {};
+                            const d = map[origin] || null;
+                            const allowMs = Math.max(1, Number(res.allowMinutes || 5)) * 60 * 1000;
+                            if (d && d.mode === 'allow_once' && d.ts && (Date.now() - d.ts) <= allowMs) {
+                                resolve({ mode: 'allow_once', expiresAt: d.ts + allowMs });
+                                return;
+                            }
+                            resolve(d || { mode: res.sensitiveDefault === 'ask' ? 'ask' : 'block' });
+                        });
+                    });
+                    const d = decision || {};
+                    const allowOnceActive = d.mode === 'allow_once' && d.expiresAt && d.expiresAt > Date.now();
+                    if (!allowOnceActive) {
+                        throw new Error('Cloud processing blocked by policy for this sensitive site. Use Allow once.');
+                    }
+                }
+
+                const url = `${GEMINI_API_URL}/${model}:generateContent?key=${apiKey}`;
+
+                const body = {
+                    contents: [
+                        { role: "user", parts: [{ text: redactPII(String(prompt || '')) }] }
+                    ],
+                    systemInstruction: {
+                        role: "system",
+                        parts: [{ text: systemInstruction }]
+                    }
+                    ,
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema
+                    }
+                };
+
+                const res = await fetch(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body),
+                });
+
+                const data = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(data.error?.message || "Gemini API error");
+                }
+
+                // Parse JSON response safely
+                let parsed;
+                try {
+                    parsed = JSON.parse(data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+                } catch (err) {
+                    throw new Error("Failed to parse Gemini JSON output");
+                }
+
+                sendResponse({ success: true, data: parsed });
+            } catch (err) {
+                sendResponse({ success: false, error: err.message });
+            }
+        })();
+
+        return true; // async
+    }
+});
