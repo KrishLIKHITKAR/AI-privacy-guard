@@ -6,7 +6,7 @@ import { setupMemoryCleanup } from './services/memory/retention.ts';
 import { inferSiteCategory } from './services/risk/siteCategories.ts';
 import { assessRisk, explainRisk } from './services/risk/riskEngine.ts';
 import { classifyRequest } from './services/classifier.ts';
-import { restoreBuckets, withBucket, isKnownAIHost, computePassiveSighting, getActiveBucket } from './services/aiBuckets.ts';
+import { restoreBuckets, withBucket, isKnownAIHost, computePassiveSighting, getActiveBucket, hasRecentActivityForOrigin } from './services/aiBuckets.ts';
 // Restore AI buckets on SW start so activity survives restarts
 restoreBuckets().catch(() => { });
 
@@ -42,8 +42,11 @@ let __aipgPopupTabId: number | undefined;
 let __aipgLastPopupAnyAt = 0;
 let __aipgAutoCloseTimer: number | undefined;
 let __aipgCurrentPopupOrigin: string | undefined;
-
+// Per-origin popup state (memory only) for smarter cooldown & escalation
 type RiskLevel = 'low' | 'medium' | 'high';
+type PopupState = { lastPopupLevel: RiskLevel; lastPopupTs: number };
+const __aipgPopupState: Map<string, PopupState> = new Map();
+
 
 async function getAutoPopupFlags() {
     const s = await new Promise<any>((resolve) => chrome.storage.local.get([
@@ -69,12 +72,39 @@ async function shouldOpenPopup(origin: string, level: RiskLevel) {
     if (!enabled) return false;
     if (!meetsThreshold(level, threshold)) return false;
     if (__aipgLastPopupAnyAt && (now - __aipgLastPopupAnyAt) < globalCdMs) return false;
-    const last = Number(originMap[origin] || 0);
-    if (last && (now - last) < originCdMs) return false;
-    originMap[origin] = now;
-    await chrome.storage.local.set({ aipgAutopopup: originMap });
-    __aipgLastPopupAnyAt = now;
-    return true;
+    const lastStored = Number(originMap[origin] || 0);
+    const state = __aipgPopupState.get(origin);
+    const lastPopupTs = state?.lastPopupTs || 0;
+    const lastPopupLevel = state?.lastPopupLevel || 'low';
+    const cooldown = Math.max(30_000, originCdMs); // enforce default 30s minimum per requirements
+
+    // Escalation logic: reopen if new level > lastPopupLevel
+    const rank: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2 };
+    const isEscalation = rank[level] > rank[lastPopupLevel];
+    const mediumToHigh = lastPopupLevel === 'medium' && level === 'high';
+
+    // Detect recent AI activity (aiDetected-like event via buckets)
+    const recentAI = hasRecentActivityForOrigin(origin);
+
+    const withinCooldown = lastPopupTs && ((now - lastPopupTs) < cooldown);
+    const storedWithinCooldown = lastStored && ((now - lastStored) < cooldown);
+    const passCooldown = !(withinCooldown || storedWithinCooldown);
+
+    // Always reopen on escalation from Medium->High or when we have fresh AI activity
+    if (mediumToHigh || recentAI) {
+        __aipgPopupState.set(origin, { lastPopupLevel: level, lastPopupTs: now });
+        originMap[origin] = now; await chrome.storage.local.set({ aipgAutopopup: originMap });
+        __aipgLastPopupAnyAt = now;
+        return true;
+    }
+
+    if (passCooldown || isEscalation) {
+        __aipgPopupState.set(origin, { lastPopupLevel: level, lastPopupTs: now });
+        originMap[origin] = now; await chrome.storage.local.set({ aipgAutopopup: originMap });
+        __aipgLastPopupAnyAt = now;
+        return true;
+    }
+    return false;
 }
 
 async function openOrFocusPopup(origin: string, advanced?: boolean) {

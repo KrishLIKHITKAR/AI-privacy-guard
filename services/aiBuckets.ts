@@ -151,3 +151,12 @@ export function computePassiveSighting(url: string, host: string): boolean {
     // host-based will be checked by caller via isKnownAIHost
     return false;
 }
+
+// Check if any tab has recent activity for a given origin (within WINDOW_MS)
+export function hasRecentActivityForOrigin(origin: string): boolean {
+    const now = Date.now();
+    for (const [, b] of buckets) {
+        if (b.origin === origin && (now - b.ts) <= WINDOW_MS) return true;
+    }
+    return false;
+}
