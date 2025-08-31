@@ -217,6 +217,76 @@ chrome.webRequest.onHeadersReceived.addListener(
     ['responseHeaders', 'extraHeaders']
 );
 
+// Track true transfer sizes via onCompleted.encodedDataLength for model and long streams
+type CompletedDetails = { tabId?: number; url?: string; requestId: string; encodedDataLength?: number } & Record<string, any>;
+const __aipgCountedRequests: Map<string, { tabId: number; origin: string; level: 'header' | 'med' | 'huge' }>
+    = new Map();
+
+function pathSuggestsModel(u: string): boolean {
+    try {
+        const p = new URL(u).pathname.toLowerCase();
+        // common model/artifact extensions or name hints
+        if (/(\.gguf|\.safetensors|\.bin|\.pt|\.pth|\.onnx|\.tflite|\.ckpt)(\?|$)/i.test(p)) return true;
+        if (/(model|weights|checkpoint|artifact)/i.test(p)) return true;
+        return false;
+    } catch { return false; }
+}
+
+chrome.webRequest.onCompleted.addListener(
+    (details: CompletedDetails) => {
+        try {
+            const tabId = Number(details.tabId);
+            const url = String(details.url || '');
+            const origin = (() => { try { return new URL(url).origin; } catch { return ''; } })();
+            if (!origin || !Number.isFinite(tabId) || tabId < 0) return;
+            const size = Number(details.encodedDataLength || 0);
+            if (!Number.isFinite(size) || size <= 0) return;
+
+            const reqId = String(details.requestId || '');
+            const was = __aipgCountedRequests.get(reqId);
+
+            // Read content-type captured earlier if present (safe fallback via responseHeaders absent here)
+            const isModel = pathSuggestsModel(url);
+
+            // Stream classification when content-type indicates event streams and size large
+            const ct = String((details as any)?.responseHeaders?.find?.((h: any) => /content-type/i.test(h?.name || ''))?.value || '').toLowerCase();
+            const isStream = ct.includes('text/event-stream') || ct.includes('application/x-ndjson');
+
+            if (isModel) {
+                // Map size buckets
+                const med = size >= 10 * 1024 * 1024 && size <= 100 * 1024 * 1024;
+                const huge = size > 100 * 1024 * 1024;
+                if (huge || med) {
+                    withBucket(tabId, origin, (b) => {
+                        b.counts.modelDownload++; // keep legacy aggregate
+                        if (huge) {
+                            b.counts.modelDownloadsHuge = (b.counts.modelDownloadsHuge || 0) + 1;
+                            // if previously counted as med via header, consider upgrade only
+                            if (was && was.level === 'med') {
+                                // Already incremented med earlier; optional downgrade not needed, just record the new level
+                            }
+                            __aipgCountedRequests.set(reqId, { tabId, origin, level: 'huge' });
+                        } else if (med) {
+                            // If we already counted this request, upgrade med→huge only when size indicates
+                            if (!was) {
+                                b.counts.modelDownloadsMed = (b.counts.modelDownloadsMed || 0) + 1;
+                                __aipgCountedRequests.set(reqId, { tabId, origin, level: 'med' });
+                            }
+                        }
+                    });
+                }
+            }
+
+            if (isStream && size > 5 * 1024 * 1024) {
+                withBucket(tabId, origin, (b) => {
+                    b.counts.streamLarge = (b.counts.streamLarge || 0) + 1;
+                });
+            }
+        } catch { /* ignore */ }
+    },
+    { urls: ['<all_urls>'] }
+);
+
 chrome.runtime.onMessage.addListener((msg: any, _sender: any, sendResponse: any) => {
     // ---------------- Local Memory (used by content.js) ----------------
     const MEMORY_KEY = 'aipgMemoryRecords';

@@ -6,7 +6,10 @@ declare const chrome: any;
 export type SignalCounts = {
     aiPost: number;
     sse: number;
-    modelDownload: number;
+    modelDownload: number; // legacy aggregate
+    modelDownloadsMed?: number;
+    modelDownloadsHuge?: number;
+    streamLarge?: number; // SSE/NDJSON > threshold
     passive: number;
 };
 
@@ -119,11 +122,11 @@ export function withBucket(tabId: number, origin: string, fn: (b: SignalBucket) 
     const now = Date.now();
     let b = buckets.get(key);
     if (!b) {
-        b = { tabId, origin, counts: { aiPost: 0, sse: 0, modelDownload: 0, passive: 0 }, windowStart: now, ts: now };
+        b = { tabId, origin, counts: { aiPost: 0, sse: 0, modelDownload: 0, modelDownloadsMed: 0, modelDownloadsHuge: 0, streamLarge: 0, passive: 0 }, windowStart: now, ts: now };
     } else {
         // if window expired, reset counts and start a new window
         if ((now - b.windowStart) > WINDOW_MS) {
-            b = { ...b, counts: { aiPost: 0, sse: 0, modelDownload: 0, passive: 0 }, windowStart: now };
+            b = { ...b, counts: { aiPost: 0, sse: 0, modelDownload: 0, modelDownloadsMed: 0, modelDownloadsHuge: 0, streamLarge: 0, passive: 0 }, windowStart: now };
         }
     }
     const before = JSON.stringify(b);
