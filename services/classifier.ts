@@ -1,5 +1,6 @@
 // services/classifier.ts - classify requests locally
 import { DB_KEYS, ProviderDB, getLocal, setLocal, saveService, getExplainCached, setExplainCached } from './db';
+import { MIN_JSON_BODY_BYTES, TRIVIAL_POST_MAX_BYTES, SEEN_HOST_TTL_MS } from './constants';
 
 declare const chrome: any;
 
@@ -39,7 +40,7 @@ function payloadLooksLikeUserContent(details: any): boolean {
     if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
         const lenHeader = (details.requestHeaders || []).find((h: any) => /content-length/i.test(h?.name || ''))?.value;
         const len = lenHeader ? parseInt(String(lenHeader), 10) : NaN;
-        if (!Number.isNaN(len) && len > 4000) return true;
+        if (!Number.isNaN(len) && len > TRIVIAL_POST_MAX_BYTES) return true;
         const types = guessDataTypesFromHeaders(details.requestHeaders);
         if (types.some(t => ['image', 'audio', 'video', 'binary'].includes(t))) return true;
     }
@@ -97,10 +98,23 @@ export async function classifyRequest(details: any) {
         const suspiciousPath = (() => { try { return pathHeuristics.test(new URL(url).pathname); } catch { return false; } })();
         const userContenty = payloadLooksLikeUserContent(details);
         const structuredOut = responseLooksStructured(details);
+        const resourceType = String(details.type || '').toLowerCase();
+        const authHeader = (details.requestHeaders || []).find((h: any) => /^authorization$/i.test(h?.name || ''))?.value || '';
+        const hasAuthBearer = /bearer\s+[a-z0-9-_\.]+/i.test(authHeader || '');
+        const hasApiKeyish = /(x-api-key|api[-_ ]?key|authorization)/i.test((details.requestHeaders || []).map((h: any) => h?.name || '').join(','));
+        const contentType = (details.requestHeaders || []).find((h: any) => /content-type/i.test(h?.name || ''))?.value || '';
+        const contentLength = (() => { const v = (details.requestHeaders || []).find((h: any) => /content-length/i.test(h?.name || ''))?.value; const n = v ? parseInt(String(v), 10) : NaN; return Number.isNaN(n) ? 0 : n; })();
+        const isJsonLike = /application\/(json|x-ndjson)/i.test(contentType || '');
 
         let isAI = false;
         let classification: 'known' | 'heuristic' | 'unknown' = 'unknown';
         let reason = '';
+
+        // Domain sighting cache to identify previously unseen hosts (in-memory, persisted optional)
+        const seenKey = 'aipgSeenHosts';
+        const seenRes = await getLocal<Record<string, number>>([seenKey]);
+        const seenMap = (seenRes[seenKey] || {}) as Record<string, number>;
+        const prevSeen = seenMap[host] || 0;
 
         if (knownProviderName) {
             isAI = true; classification = 'known'; reason = `Known AI provider: ${knownProviderName}`;
@@ -108,6 +122,25 @@ export async function classifyRequest(details: any) {
             isAI = true; classification = 'heuristic'; reason = 'Heuristics: path + payload/response';
         } else if (userContenty && structuredOut) {
             isAI = true; classification = 'heuristic'; reason = 'Heuristics: user-like input and structured output';
+        } else {
+            // Heuristic-based detection for unknown providers
+            let unknownAI = false;
+            // Dedup/ignore: skip pure media/cdn resource types
+            const ignoreType = ['image', 'media', 'font', 'stylesheet'].includes(resourceType) || /\.(png|jpe?g|gif|webp|svg|mp4|webm|mp3|wav|woff2?|ttf)(\?|$)/i.test(url);
+            const shortTrivial = contentLength > 0 && contentLength <= TRIVIAL_POST_MAX_BYTES;
+            if (!ignoreType && !shortTrivial) {
+                const wsOrSse = resourceType === 'websocket' || resourceType === 'eventsource' || structuredOut; // SSE flagged in response headers by caller
+                const bigJsonPost = isJsonLike && contentLength >= MIN_JSON_BODY_BYTES && ['POST', 'PUT', 'PATCH'].includes((details.method || 'GET').toUpperCase());
+                const authy = !!hasAuthBearer || !!hasApiKeyish;
+                const unknownDomain = !provider; // not in static DB
+                const unseenHost = !prevSeen || (Date.now() - prevSeen) > SEEN_HOST_TTL_MS;
+                if (unknownDomain && (authy || bigJsonPost || wsOrSse) && unseenHost) {
+                    unknownAI = true;
+                }
+            }
+            if (unknownAI) {
+                isAI = true; classification = 'heuristic'; reason = 'Unknown AI-like traffic';
+            }
         }
 
         const dataTypes = guessDataTypesFromHeaders(details.requestHeaders).concat(guessDataTypesFromHeaders(details.responseHeaders));
@@ -135,6 +168,8 @@ export async function classifyRequest(details: any) {
             lastSeen: Date.now(),
         };
         await saveService(record);
+        // update seen host map to avoid repeated "unseen" triggers
+        try { seenMap[host] = Date.now(); await setLocal({ [seenKey]: seenMap }); } catch { }
         // Auto-popup based on threshold (low/medium/high) once per origin; background manages cooldown and single window
         if (record.isAI && record.origin) {
             try {
