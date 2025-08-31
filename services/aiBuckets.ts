@@ -16,6 +16,9 @@ export type SignalBucket = {
     counts: SignalCounts;
     windowStart: number; // ms epoch
     ts: number; // last update
+    piiMarks?: number;
+    lastPiiTs?: number;
+    piiKinds?: Set<string>;
 };
 
 export const BUCKET_STORE_KEY = 'aipgAIBuckets';
@@ -64,7 +67,7 @@ export function persistBucket(key: string, bucket: SignalBucket) {
         try {
             const res = await getLocal<Record<string, SignalBucket>>([BUCKET_STORE_KEY]);
             const store = (res[BUCKET_STORE_KEY] as any) || {};
-            store[key] = { tabId: bucket.tabId, origin: bucket.origin, counts: bucket.counts, windowStart: bucket.windowStart, ts: bucket.ts };
+            store[key] = { tabId: bucket.tabId, origin: bucket.origin, counts: bucket.counts, windowStart: bucket.windowStart, ts: bucket.ts, piiMarks: bucket.piiMarks || 0, lastPiiTs: bucket.lastPiiTs || 0, piiKinds: Array.from(bucket.piiKinds || []) };
             await setLocal({ [BUCKET_STORE_KEY]: store });
         } catch { /* ignore */ }
         finally {
@@ -90,6 +93,9 @@ export async function restoreBuckets(): Promise<Map<string, SignalBucket>> {
                     counts: { aiPost: Number(vv.counts?.aiPost || 0), sse: Number(vv.counts?.sse || 0), modelDownload: Number(vv.counts?.modelDownload || 0), passive: Number(vv.counts?.passive || 0) },
                     windowStart: Number(vv.windowStart) || now,
                     ts: Number(vv.ts) || now,
+                    piiMarks: Number(vv.piiMarks || 0),
+                    lastPiiTs: Number(vv.lastPiiTs || 0),
+                    piiKinds: new Set<string>(Array.isArray(vv.piiKinds) ? vv.piiKinds.map((s: any) => String(s)) : []),
                 };
                 // prune old (> WINDOW_MS)
                 if ((now - b.ts) <= WINDOW_MS) buckets.set(k, b);
@@ -159,4 +165,41 @@ export function hasRecentActivityForOrigin(origin: string): boolean {
         if (b.origin === origin && (now - b.ts) <= WINDOW_MS) return true;
     }
     return false;
+}
+
+// Dedup recent PII hashes for 2s to avoid flooding
+const piiHashLastSeen = new Map<string, number>();
+
+export type PiiMarkInput = { tabId: number; origin: string; kinds: string[]; hash: string; now?: number };
+
+export function markPii(input: PiiMarkInput, windowMsForPii = 15_000, dedupeMs = 2_000): SignalBucket | null {
+    const { tabId, origin, kinds, hash } = input;
+    const now = input.now ?? Date.now();
+    if (!origin || !Number.isFinite(tabId) || tabId < 0 || !hash) return null;
+    const key = tabOriginKey(tabId, origin);
+    const dedupeKey = `${key}|${hash}`;
+    const last = piiHashLastSeen.get(dedupeKey) || 0;
+    if (last && (now - last) < dedupeMs) return getActiveBucket(tabId, origin);
+    piiHashLastSeen.set(dedupeKey, now);
+    return withBucket(tabId, origin, (b) => {
+        // Reset PII window if expired
+        if (!b.lastPiiTs || (now - b.lastPiiTs) > windowMsForPii) {
+            b.piiMarks = 0;
+            b.piiKinds = new Set<string>();
+        }
+        b.piiMarks = (b.piiMarks || 0) + 1;
+        b.lastPiiTs = now;
+        if (!b.piiKinds) b.piiKinds = new Set<string>();
+        for (const k of kinds || []) b.piiKinds.add(String(k));
+        return b;
+    });
+}
+
+export type PiiWindowConfig = { windowMs: number };
+export function getDefaultPiiWindow(): number { return 15_000; }
+
+// Pure helper for tests and classifier: should we escalate due to recent PII within window?
+export function shouldEscalateWithPii(bucket: Pick<SignalBucket, 'lastPiiTs'> | null | undefined, now: number, windowMs: number): boolean {
+    if (!bucket || !bucket.lastPiiTs) return false;
+    return (now - bucket.lastPiiTs) <= windowMs;
 }

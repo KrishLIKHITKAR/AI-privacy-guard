@@ -1,6 +1,7 @@
 // services/classifier.ts - classify requests locally
 import { DB_KEYS, ProviderDB, getLocal, setLocal, saveService, getExplainCached, setExplainCached } from './db';
 import { MIN_JSON_BODY_BYTES, TRIVIAL_POST_MAX_BYTES, SEEN_HOST_TTL_MS } from './constants';
+import { getActiveBucket, shouldEscalateWithPii, getDefaultPiiWindow } from './aiBuckets';
 
 declare const chrome: any;
 
@@ -142,6 +143,21 @@ export async function classifyRequest(details: any) {
                 isAI = true; classification = 'heuristic'; reason = 'Unknown AI-like traffic';
             }
         }
+
+        // Correlate with recent PII marks (per tab+origin) to enrich reason and allow escalation decisions elsewhere
+        try {
+            const tabId = Number(details.tabId);
+            const origin = pageOrigin || reqOrigin || null;
+            if (origin && Number.isFinite(tabId) && tabId >= 0) {
+                const bucket = getActiveBucket(tabId, origin);
+                const within = shouldEscalateWithPii(bucket, Date.now(), getDefaultPiiWindow());
+                if (within) {
+                    // append correlation hint; do not expose hashes or values
+                    reason = reason ? `${reason}; PII + AI network event within window` : 'PII + AI network event within window';
+                    isAI = true; // ensure it's marked
+                }
+            }
+        } catch { }
 
         const dataTypes = guessDataTypesFromHeaders(details.requestHeaders).concat(guessDataTypesFromHeaders(details.responseHeaders));
         const risk = isAI ? riskFor(dataTypes, knownProviderName) : 'Low';

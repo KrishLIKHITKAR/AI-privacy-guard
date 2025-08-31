@@ -281,6 +281,25 @@ chrome.runtime.onMessage.addListener((msg: any, _sender: any, sendResponse: any)
         })();
         return true;
     }
+    if (msg?.type === 'pii-detected') {
+        (async () => {
+            try {
+                const tabId = Number(msg.tabId);
+                const origin = String(msg.origin || '');
+                const kinds = Array.isArray(msg.piiKinds) ? msg.piiKinds.map((s: any) => String(s)) : [];
+                const hash = String(msg.piiHash || '');
+                if (!origin || !Number.isFinite(tabId) || tabId < 0 || !hash || kinds.length === 0) { sendResponse({ success: false, error: 'bad-args' }); return; }
+                // Optional: read PII window override from settings in the future; default 15s
+                // Mark bucket with PII info (no raw data)
+                const { markPii } = await import('./services/aiBuckets.ts');
+                const updated = markPii({ tabId, origin, kinds, hash });
+                sendResponse({ success: !!updated });
+            } catch (e) {
+                sendResponse({ success: false, error: (e as any)?.message || 'pii-mark-failed' });
+            }
+        })();
+        return true;
+    }
     if (msg && msg.type === 'MEMORY_WRITE') {
         (async () => {
             try {
@@ -422,7 +441,7 @@ chrome.runtime.onMessage.addListener((msg: any, _sender: any, sendResponse: any)
 ensureSeedProviders().catch(() => { });
 // Seed defaults if missing
 try {
-    chrome.storage.local.get(['riskEngineEnabled', 'sanitizationEnabled', 'granularityEnabled', 'sessionSanitizerEnabled', 'memoryCenterEnabled', 'useLocalAIForExplanations', 'strictMode', 'ttlDays', 'granularitySettings', 'alwaysMaskEnabled', 'autopopupThreshold'], (r: any) => {
+    chrome.storage.local.get(['riskEngineEnabled', 'sanitizationEnabled', 'granularityEnabled', 'sessionSanitizerEnabled', 'memoryCenterEnabled', 'useLocalAIForExplanations', 'strictMode', 'ttlDays', 'granularitySettings', 'alwaysMaskEnabled', 'autopopupThreshold', 'correlatePiiWithNetwork', 'piiCloudEscalationHigh'], (r: any) => {
         const patch: any = {};
         if (r.riskEngineEnabled === undefined) patch.riskEngineEnabled = true;
         if (r.sanitizationEnabled === undefined) patch.sanitizationEnabled = true;
@@ -436,6 +455,8 @@ try {
         if (r.alwaysMaskEnabled === undefined) patch.alwaysMaskEnabled = true;
         if (!r.autopopupThreshold) patch.autopopupThreshold = 'medium';
         if (r.autopopupEnabled === undefined) patch.autopopupEnabled = true; // default ON
+        if (r.correlatePiiWithNetwork === undefined) patch.correlatePiiWithNetwork = true;
+        if (r.piiCloudEscalationHigh === undefined) patch.piiCloudEscalationHigh = true;
         if (Object.keys(patch).length) chrome.storage.local.set(patch);
     });
 } catch { }
