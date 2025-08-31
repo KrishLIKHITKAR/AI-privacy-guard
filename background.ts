@@ -6,9 +6,31 @@ import { setupMemoryCleanup } from './services/memory/retention.ts';
 import { inferSiteCategory } from './services/risk/siteCategories.ts';
 import { assessRisk, explainRisk } from './services/risk/riskEngine.ts';
 import { classifyRequest } from './services/classifier.ts';
-// Capture URL/method early (covers main_frame and subresource fetches)
+import { restoreBuckets, withBucket, isKnownAIHost, computePassiveSighting, getActiveBucket } from './services/aiBuckets.ts';
+// Restore AI buckets on SW start so activity survives restarts
+restoreBuckets().catch(() => { });
+
+// Capture URL/method early (covers main_frame and subresource fetches) and update AI buckets
 chrome.webRequest.onBeforeRequest.addListener(
-    (details: any) => { classifyRequest(details).catch(() => { }); },
+    (details: any) => {
+        classifyRequest(details).catch(() => { });
+        try {
+            const tabId = Number(details.tabId);
+            const origin = (() => { try { return new URL(details.initiator || details.documentUrl || details.url).origin; } catch { return ''; } })();
+            if (!origin || !Number.isFinite(tabId) || tabId < 0) return;
+            const url = String(details.url || '');
+            const host = (() => { try { return new URL(url).host; } catch { return ''; } })();
+            const method = String(details.method || 'GET').toUpperCase();
+            // mark passive sighting
+            const passive = computePassiveSighting(url, host);
+            withBucket(tabId, origin, (b) => {
+                if (passive) b.counts.passive++;
+                // AI POSTs likely carry user content
+                if (method === 'POST') b.counts.aiPost++;
+                return b;
+            });
+        } catch { }
+    },
     { urls: ['<all_urls>'] }
 );
 
@@ -117,13 +139,50 @@ function scheduleAutoClose(origin: string) {
 }
 
 chrome.webRequest.onBeforeSendHeaders.addListener(
-    (details: any) => { classifyRequest(details).catch(() => { }); },
+    (details: any) => {
+        classifyRequest(details).catch(() => { });
+        try {
+            const tabId = Number(details.tabId);
+            const origin = (() => { try { return new URL(details.initiator || details.documentUrl || details.url).origin; } catch { return ''; } })();
+            if (!origin || !Number.isFinite(tabId) || tabId < 0) return;
+            const url = String(details.url || '');
+            const host = (() => { try { return new URL(url).host; } catch { return ''; } })();
+            // Known AI hosts count as passive sightings too
+            void (async () => { if (await isKnownAIHost(host)) withBucket(tabId, origin, b => { b.counts.passive++; }); })();
+        } catch { }
+    },
     { urls: ['<all_urls>'] },
     ['requestHeaders', 'extraHeaders']
 );
 
 chrome.webRequest.onHeadersReceived.addListener(
-    (details: any) => { classifyRequest(details).catch(() => { }); },
+    (details: any) => {
+        classifyRequest(details).catch(() => { });
+        try {
+            const tabId = Number(details.tabId);
+            const origin = (() => { try { return new URL(details.initiator || details.documentUrl || details.url).origin; } catch { return ''; } })();
+            if (!origin || !Number.isFinite(tabId) || tabId < 0) return;
+            const url = String(details.url || '');
+            const host = (() => { try { return new URL(url).host; } catch { return ''; } })();
+            // Large model file downloads heuristic via content-length (if present)
+            try {
+                const lenHeader = (details.responseHeaders || []).find((h: any) => /content-length/i.test(h?.name || ''))?.value;
+                const len = lenHeader ? parseInt(String(lenHeader), 10) : NaN;
+                if (!Number.isNaN(len) && len > 20 * 1024 * 1024) { // >20MB
+                    withBucket(tabId, origin, (b) => { b.counts.modelDownload++; });
+                }
+            } catch { }
+            // Event-stream or NDJSON indicate streaming AI responses
+            try {
+                const ct = String((details.responseHeaders || []).find((h: any) => /content-type/i.test(h?.name || ''))?.value || '').toLowerCase();
+                if (ct.includes('text/event-stream') || ct.includes('application/x-ndjson')) {
+                    withBucket(tabId, origin, (b) => { b.counts.sse++; });
+                }
+            } catch { }
+            // Known AI host adds passive signal
+            void (async () => { if (await isKnownAIHost(host)) withBucket(tabId, origin, b => { b.counts.passive++; }); })();
+        } catch { }
+    },
     { urls: ['<all_urls>'] },
     ['responseHeaders', 'extraHeaders']
 );
@@ -312,8 +371,9 @@ chrome.runtime.onMessage.addListener((msg: any, _sender: any, sendResponse: any)
     if (msg?.type === 'RISK_ASSESS') {
         (async () => {
             try {
-                const { origin, trackersPresent, processing, piiSummary } = msg?.ctx || {};
+                const { origin, trackersPresent, processing, piiSummary, tabId } = msg?.ctx || {};
                 const siteCategory = inferSiteCategory(new URL(origin).hostname, origin);
+                const bucket = (Number.isFinite(tabId) && tabId != null) ? getActiveBucket(Number(tabId), String(origin)) : null;
                 const assessment = assessRisk({ origin, processing, trackersPresent: !!trackersPresent, siteCategory, piiSummary });
                 const text = await explainRisk(assessment, { origin, processing, trackersPresent: !!trackersPresent, siteCategory, piiSummary });
                 sendResponse({ success: true, data: { assessment, text } });
