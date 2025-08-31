@@ -12,9 +12,11 @@ describe('riskEngine.assessRisk', () => {
         });
         expect(r.level === 'high' || r.score >= 65).toBe(true);
         expect(r.redFlags.join(' ')).toMatch(/Cloud|banking|card/i);
+        expect(r.aiDetected).toBe(true);
     });
     it('assigns low for general + on_device no data', () => {
         const r = assessRisk({ origin: 'https://site', processing: 'on_device', trackersPresent: false, siteCategory: 'general', piiSummary: { counts: {} } });
         expect(r.level === 'low' || r.score < 35).toBe(true);
+        expect(r.aiDetected).toBe(false);
     });
 });

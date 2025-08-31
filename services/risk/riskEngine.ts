@@ -14,11 +14,14 @@ export function assessRisk(ctx: AIDetectionContext): RiskAssessment {
     const score = Math.min(100, Math.round(base + dataScore + proc + track));
     const level = toLevel(score);
     const redFlags: string[] = [];
+    // Infer AI presence from processing hints and PII signals (conservative):
+    const anyPii = Object.values(counts).some(v => v > 0);
+    const aiDetected = ctx.processing === 'cloud' || (ctx.processing === 'on_device' && anyPii) || ctx.trackersPresent;
     if (ctx.processing === 'cloud') redFlags.push('Cloud processing');
     if (ctx.trackersPresent) redFlags.push('Trackers detected');
     for (const [k, v] of Object.entries(counts)) if (v > 0 && (DATA_WEIGHTS[k] || 0) >= 20) redFlags.push(`${k} detected`);
     if (['banking', 'healthcare', 'government'].includes(ctx.siteCategory)) redFlags.push(`${ctx.siteCategory} site`);
-    return { level, score, redFlags, factors };
+    return { aiDetected, level, score, redFlags, factors };
 }
 
 export async function explainRisk(assessment: RiskAssessment, ctx: AIDetectionContext): Promise<string> {

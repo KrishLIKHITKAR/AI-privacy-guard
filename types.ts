@@ -76,6 +76,7 @@ export interface AIDetectionContext {
 export type RiskLevel = 'low' | 'medium' | 'high';
 
 export interface RiskAssessment {
+    aiDetected: boolean; // whether AI activity is inferred from context (non-breaking addition)
     level: RiskLevel;
     score: number; // 0-100
     redFlags: string[]; // concrete reasons
